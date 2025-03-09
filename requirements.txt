@@ -1,0 +1,4 @@
+jax
+chex
+jumanji
+optax
