@@ -1,4 +1,7 @@
 jax
 chex
 jumanji
+dm-haiku
 optax
+RLax
+hydra-core

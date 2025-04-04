@@ -1,0 +1,5 @@
+_target_: mLN.environment.DynamicSpectrumEnv
+num_bs: 3
+num_bands: 5
+num_power_levels: 4
+num_users: 5
