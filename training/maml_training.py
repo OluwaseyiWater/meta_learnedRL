@@ -8,13 +8,11 @@ import os
 # Hydra decorator to load config from a YAML file
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
-    # Print the resolved configuration for debugging
+    
     print(OmegaConf.to_yaml(cfg))
 
-    # Instantiate the environment using Hydra's instantiate utility
     env = hydra.utils.instantiate(cfg.env)
 
-    # Train MAML with parameters from the config
     trained_params = train_maml(
         env,
         num_meta_tasks=cfg.training.num_meta_tasks,
