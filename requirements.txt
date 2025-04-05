@@ -5,3 +5,6 @@ dm-haiku
 optax
 RLax
 hydra-core
+wandb
+graphviz
+tempfile

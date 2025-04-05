@@ -1,0 +1,9 @@
+num_meta_iterations : 100
+num_tasks_per_batch : 8
+inner_steps : 5
+meta_lr : 1e-4
+inner_lr : 1e-4
+clip_ratio : 0.2
+wandb_project: "recurrent-maml-ppo"  
+wandb_name: null                    
+use_wandb: true

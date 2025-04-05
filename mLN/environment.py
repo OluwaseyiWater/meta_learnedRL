@@ -7,7 +7,29 @@ from jumanji.env import Environment
 from jumanji.types import TimeStep, restart, termination, transition, truncation
 from typing import Optional, Tuple, Dict
 import numpy as np
-import optax  
+import optax 
+
+# Constants and hyperparameters
+MAX_INTERFERENCE = 25.0  
+MAX_POWER = 23.0  
+MAX_LATENCY = 50.0  
+NUM_BS = 3
+NUM_USERS = 10
+NUM_BANDS = 5
+NUM_POWER_LEVELS = 4 
+POWER_LEVELS = jnp.linspace(0, MAX_POWER, NUM_POWER_LEVELS) 
+FADING_COHERENCE = 0.9  
+MAX_STEPS = 100 
+
+@chex.dataclass
+class SpectrumState:
+    channel_gains: chex.Array      # Shape: (num_bs, NUM_USERS) or (NUM_USERS, num_bs)
+    interference_map: chex.Array   # Now per BS and band: shape (num_bs, num_bands)
+    qos_metrics: chex.Array        # Shape: (NUM_USERS, 2) [latency, throughput]
+    spectrum_alloc: chex.Array     # Shape: (num_bs, num_bands), discrete allocation indices
+    tx_power: chex.Array           # Shape: (num_bs, num_bands), current transmit power (dBm)
+    time: chex.Array               # Scalar step counter
+    key: chex.PRNGKey              # JAX PRNG key for randomness
 
 class DynamicSpectrumEnv(Environment):
     def __init__(self, num_bs=NUM_BS, num_users=NUM_USERS, num_bands=NUM_BANDS, max_steps=MAX_STEPS,
