@@ -6,6 +6,7 @@ import tensorflow_probability.substrates.jax as tfp
 from typing import Any, Tuple, Dict, List
 from utils import flatten_state
 import wandb
+from mLN.environment import DynamicSpectrumEnv
 
 tfd = tfp.distributions
 

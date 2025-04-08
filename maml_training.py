@@ -15,10 +15,10 @@ def main(cfg: DictConfig) -> None:
 
     trained_params = train_maml(
         env,
-        num_meta_tasks=cfg.training.num_meta_tasks,
-        inner_steps=cfg.training.inner_steps,
-        meta_lr=cfg.training.meta_lr,
-        inner_lr=cfg.training.inner_lr
+        num_meta_tasks=cfg.maml.num_meta_tasks,
+        inner_steps=cfg.maml.inner_steps,
+        meta_lr=cfg.maml.meta_lr,
+        inner_lr=cfg.maml.inner_lr
     )
 
     # Get the output directory managed by Hydra

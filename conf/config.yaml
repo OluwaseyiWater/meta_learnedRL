@@ -1,7 +1,5 @@
 defaults:
   - env: default
-
-training:
   - maml: default
   - recurrent_ml: default
   

@@ -34,17 +34,17 @@ def main(cfg: DictConfig) -> None:
         value_params=value_params,
         policy_apply=policy.apply,  
         value_apply=value.apply,   
-        num_tasks=cfg.training.num_tasks_per_batch,  
-        inner_lr=cfg.training.inner_lr,
-        inner_steps=cfg.training.inner_steps,
-        meta_lr=cfg.training.meta_lr,
-        num_iterations=cfg.training.num_meta_iterations, 
+        num_tasks=cfg.recurrent_ml.num_tasks_per_batch,  
+        inner_lr=cfg.recurrent_ml.inner_lr,
+        inner_steps=cfg.recurrent_ml.inner_steps,
+        meta_lr=cfg.recurrent_ml.meta_lr,
+        num_iterations=cfg.recurrent_ml.num_meta_iterations, 
         obs_dim=obs_dim,
         key=key,
-        clip_ratio=cfg.training.clip_ratio,
-        wandb_project=cfg.training.wandb_project,  
-        wandb_name=cfg.training.wandb_name,        
-        use_wandb=cfg.training.use_wandb           
+        clip_ratio=cfg.recurrent_ml.clip_ratio,
+        wandb_project=cfg.recurrent_ml.wandb_project,  
+        wandb_name=cfg.recurrent_ml.wandb_name,        
+        use_wandb=cfg.recurrent_ml.use_wandb           
     )
 
     # Save the trained parameters
