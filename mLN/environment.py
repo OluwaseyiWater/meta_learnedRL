@@ -20,6 +20,7 @@ NUM_POWER_LEVELS = 4
 POWER_LEVELS = jnp.linspace(0, MAX_POWER, NUM_POWER_LEVELS) 
 FADING_COHERENCE = 0.9  
 MAX_STEPS = 100 
+MIN_SINR = 5.0 
 
 @chex.dataclass
 class SpectrumState:

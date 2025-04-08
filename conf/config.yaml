@@ -1,6 +1,8 @@
 defaults:
   - env: default
+
+training:
   - maml: default
-  - recurrent_ml: 
+  - recurrent_ml: default
   
 seed: 42
