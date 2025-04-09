@@ -1,6 +1,9 @@
 from mLN.environment import DynamicSpectrumEnv
 from models.maml import train_maml
 from utils import save_model
+import jax
+from models.maml import make_networks
+from utils import flatten_state
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import os
@@ -12,13 +15,33 @@ def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
     env = hydra.utils.instantiate(cfg.env)
+    num_bs = env.num_bs
+    num_bands = env.num_bands
+    num_power_levels = env.num_power_levels
+    key = jax.random.PRNGKey(42)
+    key, init_key = jax.random.split(key)
+    state, _ = env.reset(key)
+    sample_obs = flatten_state(state)
+    policy, value = make_networks(num_bs, num_bands, num_power_levels)
+    policy_params = policy.init(init_key, sample_obs)
+    value_params = value.init(init_key, sample_obs)
+
+    obs_dim = sample_obs.shape[0]
+    
 
     trained_params = train_maml(
         env,
-        num_meta_tasks=cfg.maml.num_meta_tasks,
+        policy_params=policy_params,
+        value_params=value_params,
+        policy_apply=policy.apply,
+        value_apply=value.apply,
+        num_tasks=cfg.maml.num_meta_tasks,
         inner_steps=cfg.maml.inner_steps,
         meta_lr=cfg.maml.meta_lr,
-        inner_lr=cfg.maml.inner_lr
+        inner_lr=cfg.maml.inner_lr,
+        num_iterations=cfg.maml.num_meta_iterations,
+        dim=obs_dim,
+        key=key,
     )
 
     # Get the output directory managed by Hydra

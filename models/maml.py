@@ -1,6 +1,6 @@
 from jumanji.types import TimeStep
 from functools import partial
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -434,6 +434,19 @@ def compute_meta_objective_for_task(
     
     return meta_loss, new_obs_norm_state, new_reward_norm_state
 
+
+def adapt_to_task(params, env, policy_apply, value_apply, task_key, inner_lr, inner_steps, obs_norm_state, reward_norm_state):
+    # Simple gradient descent adaptation (implement your actual inner loop)
+    adapted_params = params
+    for _ in range(inner_steps):
+        loss_fn = lambda p: compute_meta_objective_for_task(
+            p, env, policy_apply, value_apply, task_key, inner_lr, inner_steps,
+            obs_norm_state, reward_norm_state
+        )[0]
+        loss, grads = jax.value_and_grad(loss_fn)(adapted_params)
+        adapted_params = jax.tree.map(lambda p, g: p - inner_lr * g, adapted_params, grads)
+    return adapted_params
+
 def train_maml(
     env: Any,
     policy_params: Any,
@@ -446,11 +459,35 @@ def train_maml(
     meta_lr: float,
     num_iterations: int,
     dim: int,
-    key: jnp.ndarray
+    key: jnp.ndarray,
+    eval_interval: int = 10,  
+    num_eval_tasks: int = 5,
+    wandb_project: str = "maml-training",
+    wandb_name: str = None,
+    use_wandb: bool = True
 ):
     params = (policy_params, value_params)
     obs_norm_state = init_obs_normalizer(dim)
     reward_norm_state = init_reward_normalizer()
+    
+    if use_wandb:
+        # Initialize W&B
+        config = {
+            "num_tasks": num_tasks,
+            "inner_lr": inner_lr,
+            "inner_steps": inner_steps,
+            "meta_lr": meta_lr,
+            "num_iterations": num_iterations,
+            "dim": dim,
+            "eval_interval": eval_interval,
+            "num_eval_tasks": num_eval_tasks
+        }
+        
+        wandb.init(
+            project=wandb_project,
+            name=wandb_name,
+            config=config
+        )
     
     # Initialize optimizer with gradient clipping
     optimizer = optax.chain(
@@ -459,7 +496,10 @@ def train_maml(
     )
     opt_state = optimizer.init(params)
     
+    # Metrics storage
     meta_losses = []
+    avg_grad_norms = []
+    task_performances = []
     
     for iteration in range(num_iterations):
         key, subkey = jax.random.split(key)
@@ -468,9 +508,12 @@ def train_maml(
         meta_loss_sum = 0.0
         all_grads = None
         valid_tasks = 0
+        task_returns = []
         
         for i in range(num_tasks):
-            task_key = task_keys[i]
+            task_key = jax.random.split(task_keys[i], 2)  
+            train_key, test_key = task_key[0], task_key[1]
+            
             meta_loss_fn = lambda p: compute_meta_objective_for_task(
                 p, env, policy_apply, value_apply, task_key, inner_lr, inner_steps,
                 obs_norm_state, reward_norm_state
@@ -479,6 +522,28 @@ def train_maml(
             meta_loss, grads = jax.value_and_grad(meta_loss_fn)(params)
             if not jnp.isfinite(meta_loss):  # Skip invalid losses
                 continue
+            
+            # Get train return before adaptation
+            task_env = sample_task(env, train_key)
+            pre_traj = sample_trajectories(
+                task_env, params[0], params[1], policy_apply, value_apply, train_key,
+                obs_norm_state, reward_norm_state
+            )
+            train_return = jnp.mean(pre_traj['rewards']) if len(pre_traj['rewards']) > 0 else 0.0
+            
+            # Get test return after adaptation
+            adapted_params = adapt_to_task(
+                params, env, policy_apply, value_apply, test_key,
+                inner_lr, inner_steps, obs_norm_state, reward_norm_state
+            )
+            test_env = sample_task(env, test_key)
+            post_traj = sample_trajectories(
+                test_env, adapted_params[0], adapted_params[1], policy_apply, value_apply, test_key,
+                obs_norm_state, reward_norm_state
+            )
+            test_return = jnp.mean(post_traj['rewards']) if len(post_traj['rewards']) > 0 else 0.0
+            
+            task_returns.append((float(train_return), float(test_return)))
             
             meta_loss_sum += meta_loss
             valid_tasks += 1
@@ -494,6 +559,9 @@ def train_maml(
         # Average gradients and losses
         avg_meta_loss = meta_loss_sum / valid_tasks
         avg_grads = jax.tree.map(lambda g: g / valid_tasks, all_grads)
+        grad_norm = jnp.sqrt(jax.tree_util.tree_reduce(
+            lambda acc, x: acc + jnp.sum(jnp.square(x)), avg_grads, 0.0
+        ))
         
         # Apply updates
         updates, opt_state = optimizer.update(avg_grads, opt_state)
@@ -510,8 +578,73 @@ def train_maml(
             if len(sample_traj['observations']) > 0:
                 obs_norm_state = update_obs_normalizer(obs_norm_state, sample_traj['observations'])
                 reward_norm_state = update_reward_normalizer(reward_norm_state, sample_traj['rewards'])
+
+        # Evaluate task performance periodically
+        if iteration % eval_interval == 0:
+            eval_key, subkey = jax.random.split(key)
+            eval_task_keys = jax.random.split(subkey, num_eval_tasks)
+            total_reward = 0.0
+            valid_eval_tasks = 0
+            
+            for eval_key in eval_task_keys:
+                # Perform inner loop adaptation
+                adapted_params = adapt_to_task(
+                    params, env, policy_apply, value_apply, eval_key,
+                    inner_lr, inner_steps, obs_norm_state, reward_norm_state
+                )
+                # Evaluate adapted parameters
+                eval_env = sample_task(env, eval_key)
+                traj = sample_trajectories(
+                    eval_env, adapted_params[0], adapted_params[1],
+                    policy_apply, value_apply, eval_key,
+                    obs_norm_state, reward_norm_state
+                )
+                if len(traj['rewards']) > 0:
+                    total_reward += jnp.mean(traj['rewards'])
+                    valid_eval_tasks += 1
+            
+            avg_performance = total_reward / valid_eval_tasks if valid_eval_tasks > 0 else 0.0
+            task_performances.append(float(avg_performance))
+            print(f"Iteration {iteration}, Task Performance: {avg_performance:.4f}")
         
-        meta_losses.append(avg_meta_loss)
-        print(f"Iteration {iteration}, Meta Loss: {avg_meta_loss:.4f}")
+       # Store metrics
+        meta_losses.append(float(avg_meta_loss))
+        avg_grad_norms.append(float(grad_norm))
+        
+        # Log metrics to W&B
+        if use_wandb:
+            metrics = {
+                "meta_loss": avg_meta_loss,
+                "grad_norm": grad_norm,
+                "valid_tasks": valid_tasks
+            }
+            
+            # Log individual task returns
+            if task_returns and iteration % 10 == 0:
+                for i, (train_ret, test_ret) in enumerate(task_returns[:5]):  # Log up to 5 tasks
+                    metrics.update({
+                        f"task_{i}_train_return": train_ret,
+                        f"task_{i}_test_return": test_ret,
+                        f"task_{i}_improvement": test_ret / (train_ret + 1e-8),
+                    })
+            
+            wandb.log(metrics)    
+            
+        if iteration % 10 == 0:
+            print(f"Iteration {iteration}, Meta Loss: {avg_meta_loss:.4f}, Grad Norm: {grad_norm:.4f}")
     
-    return params, meta_losses
+    if use_wandb:
+        wandb.run.summary["final_meta_loss"] = avg_meta_loss
+        wandb.run.summary["final_grad_norm"] = grad_norm
+        wandb.run.summary["final_task_performance"] = avg_performance
+        wandb.run.summary["best_task_performance"] = max(task_performances)
+        wandb.run.summary["best_meta_loss"] = min(meta_losses)
+        wandb.run.summary["best_grad_norm"] = min(avg_grad_norms)
+        
+        wandb.finish()  # Close W&B
+    
+    return params, {
+        'meta_losses': meta_losses,
+        'avg_grad_norms': avg_grad_norms,
+        'task_performances': task_performances
+    }
