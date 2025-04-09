@@ -535,7 +535,7 @@ def train_recurrent_maml_ppo(
             task_env = sample_task(env, task_key)
             
             # Split keys for sampling
-            task_key, train_key, test_key = jax.random.split(task_key, 3)
+            task_key, train_key, test_key = jax.random.split(task_keys[i], 3)
             
             # Sample training trajectories
             train_traj = sample_trajectories(
