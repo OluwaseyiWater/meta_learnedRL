@@ -151,7 +151,7 @@ def normalize_reward(state: RewardNormalizerState, rewards: jnp.ndarray) -> jnp.
     [mean, var, count, eps, min_count] = state
     if count < min_count:
         return rewards
-    normed = (obs - mean) / jnp.sqrt(var + eps)
+    normed = (rewards - mean) / jnp.sqrt(var + eps)
     normed = jnp.clip(normed, -3.0, 3.0)
     return normed
 
