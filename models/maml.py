@@ -511,8 +511,7 @@ def train_maml(
         task_returns = []
         
         for i in range(num_tasks):
-            task_key = jax.random.split(task_keys[i], 2)  
-            train_key, test_key = task_key[0], task_key[1]
+            task_key, train_key, test_key = jax.random.split(task_keys[i], 3)
             
             meta_loss_fn = lambda p: compute_meta_objective_for_task(
                 p, env, policy_apply, value_apply, task_key, inner_lr, inner_steps,
