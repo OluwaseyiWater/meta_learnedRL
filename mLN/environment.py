@@ -102,8 +102,11 @@ class DynamicSpectrumEnv(Environment):
         SWITCHING_COST_COEFF = 1.0
         UTILIZATION_BONUS_COEFF = 2.0
         VIOLATION_PENALTY_COEFF = 10.0
+        FAIRNESS_COEFF = 0.5
+        # Calculate reward components
         throughput = jnp.sum(state.qos_metrics[:, 1])
-        fairness = 1.0 / (1e-6 + jnp.var(state.qos_metrics[:, 1]))
+        x = state.qos_metrics[:,1]
+        fairness = (jnp.sum(x)**2) / (x.shape[0] * (jnp.sum(x**2) + 1e-6))
         sinr = self._compute_sinr(state)
         sinr_violations = jnp.sum(sinr < self.min_sinr)
         latency_violations = jnp.sum(state.qos_metrics[:, 0] > self.max_latency)
@@ -112,7 +115,7 @@ class DynamicSpectrumEnv(Environment):
         power_cost = POWER_COST_COEFF * jnp.sum(new_tx_power)
         switching_cost = SWITCHING_COST_COEFF * jnp.sum(jnp.abs(previous_tx_power - new_tx_power))
         utilization_bonus = UTILIZATION_BONUS_COEFF * jnp.sum(action > 0)
-        total_reward = throughput + fairness + utilization_bonus - violation_penalty - power_cost - switching_cost
+        total_reward = throughput + FAIRNESS_COEFF * fairness + utilization_bonus - violation_penalty - power_cost - switching_cost
         return total_reward
 
     def _adaptive_penalty(self, state: SpectrumState) -> jnp.ndarray:

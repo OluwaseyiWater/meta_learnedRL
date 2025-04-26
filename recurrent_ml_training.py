@@ -5,6 +5,7 @@ from utils import flatten_state, save_model
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import os
+import pickle
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
@@ -54,6 +55,12 @@ def main(cfg: DictConfig) -> None:
     save_path = os.path.join(model_dir, "trained_params.pkl")
     save_model(save_path, params, None)
     print(f"Trained parameters saved to {save_path}")
+    
+    # Save the training history
+    history_path = os.path.join(model_dir, "history.pkl")
+    with open(history_path, 'wb') as f:
+        pickle.dump(loss_history, f)
+    print(f"Training history saved to {history_path}")
 
     # Print environment details
     print(f"Number of base stations: {env.num_bs}")

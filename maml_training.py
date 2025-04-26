@@ -7,6 +7,7 @@ from utils import flatten_state
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import os
+import pickle
 
 # Hydra decorator to load config from a YAML file
 @hydra.main(config_path="conf", config_name="config", version_base=None)
@@ -29,7 +30,7 @@ def main(cfg: DictConfig) -> None:
     obs_dim = sample_obs.shape[0]
     
 
-    trained_params = train_maml(
+    trained_params, history = train_maml(
         env,
         policy_params=policy_params,
         value_params=value_params,
@@ -53,6 +54,12 @@ def main(cfg: DictConfig) -> None:
     save_path = os.path.join(model_dir, "trained_params.pkl")
     save_model(save_path, trained_params, None)
     print(f"Trained parameters saved to {save_path}")
+    
+    # Save the training history
+    history_path = os.path.join(model_dir, "history.pkl")
+    with open(history_path, 'wb') as f:
+        pickle.dump(history, f)
+    print(f"Training history saved to {history_path}")
 
     # Print environment details
     print(f"Number of base stations: {env.num_bs}")
