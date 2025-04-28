@@ -1,4 +1,3 @@
-%%writefile models/recurrent_ml.py
 import haiku as hk
 import jax
 import jax.numpy as jnp
