@@ -401,11 +401,11 @@ def ppo_inner_adaptation(
         policy_grads, value_grads = grads
 
         # Clip gradients
-        policy_grads = jax.tree_map(lambda g: jnp.clip(g, -1.0, 1.0), policy_grads)
-        value_grads = jax.tree_map(lambda g: jnp.clip(g, -1.0, 1.0), value_grads)
+        policy_grads = jax.tree.map(lambda g: jnp.clip(g, -1.0, 1.0), policy_grads)
+        value_grads = jax.tree.map(lambda g: jnp.clip(g, -1.0, 1.0), value_grads)
 
-        new_policy_params = jax.tree_map(lambda p, g: p - inner_lr * g, curr_policy_params, policy_grads)
-        new_value_params = jax.tree_map(lambda p, g: p - inner_lr * g, curr_value_params, value_grads)
+        new_policy_params = jax.tree.map(lambda p, g: p - inner_lr * g, curr_policy_params, policy_grads)
+        new_value_params = jax.tree.map(lambda p, g: p - inner_lr * g, curr_value_params, value_grads)
 
         return (new_policy_params, new_value_params)
 
@@ -611,7 +611,7 @@ def train_recurrent_maml_ppo(
             if all_grads is None:
                 all_grads = grads
             else:
-                all_grads = jax.tree_map(lambda a, b: a + b, all_grads, grads)
+                all_grads = jax.tree.map(lambda a, b: a + b, all_grads, grads)
 
             successful_tasks += 1
 
@@ -621,7 +621,7 @@ def train_recurrent_maml_ppo(
 
         avg_meta_loss = meta_loss_sum / successful_tasks
         meta_losses.append(avg_meta_loss)
-        avg_grads = jax.tree_map(lambda g: g / successful_tasks, all_grads)
+        avg_grads = jax.tree.map(lambda g: g / successful_tasks, all_grads)
 
         updates, opt_state = optimizer.update(avg_grads, opt_state)
         params = optax.apply_updates(params, updates)
