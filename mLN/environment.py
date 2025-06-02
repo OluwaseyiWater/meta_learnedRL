@@ -24,13 +24,13 @@ MIN_SINR = 5.0
 
 @chex.dataclass
 class SpectrumState:
-    channel_gains: chex.Array      # Shape: (num_bs, NUM_USERS) or (NUM_USERS, num_bs)
-    interference_map: chex.Array   # Now per BS and band: shape (num_bs, num_bands)
-    qos_metrics: chex.Array        # Shape: (NUM_USERS, 2) [latency, throughput]
-    spectrum_alloc: chex.Array     # Shape: (num_bs, num_bands), discrete allocation indices
-    tx_power: chex.Array           # Shape: (num_bs, num_bands), current transmit power (dBm)
-    time: chex.Array               # Scalar step counter
-    key: chex.PRNGKey              # JAX PRNG key for randomness
+    channel_gains: chex.Array      
+    interference_map: chex.Array   
+    qos_metrics: chex.Array        
+    spectrum_alloc: chex.Array     
+    tx_power: chex.Array           
+    time: chex.Array               
+    key: chex.PRNGKey             
 
 class DynamicSpectrumEnv(Environment):
     def __init__(self, num_bs=NUM_BS, num_users=NUM_USERS, num_bands=NUM_BANDS, max_steps=MAX_STEPS,
@@ -142,27 +142,7 @@ class DynamicSpectrumEnv(Environment):
             key=key
         )
 
-    # def step(self, state: SpectrumState, action: chex.Array) -> Tuple[SpectrumState, TimeStep]:
-    #     action = action.reshape(self.num_bs, self.num_bands)
-    #     action_mask = self._mask_unsafe_actions(state)
-    #     safety = action_mask[jnp.arange(self.num_bs)[:, None], jnp.arange(self.num_bands)[None, :], action]
-    #     safe_action = jnp.where(safety, action, 0)
-    #     previous_tx_power = state.tx_power
-    #     new_state = self._step_dynamics(state, safe_action)
-    #     reward = self._calculate_reward(new_state, safe_action, previous_tx_power) - self._adaptive_penalty(new_state)
-    #     terminated = bool(jnp.any(new_state.qos_metrics[:, 0] > 2 * self.max_latency))
-    #     truncated = bool(new_state.time >= self.max_steps)
-    #     done_flag = terminated or truncated
-    #     timestep = jax.lax.cond(
-    #         done_flag,
-    #         lambda: jax.lax.cond(
-    #             bool(terminated),
-    #             lambda: termination(reward, new_state),
-    #             lambda: truncation(reward, new_state),
-    #         ),
-    #         lambda: transition(reward, new_state),
-    #     )
-    #     return new_state, timestep
+    
     def step(self, state: SpectrumState, action: chex.Array) -> Tuple[SpectrumState, TimeStep]:
         action = action.reshape(self.num_bs, self.num_bands)
         action_mask = self._mask_unsafe_actions(state)
@@ -172,16 +152,16 @@ class DynamicSpectrumEnv(Environment):
         new_state = self._step_dynamics(state, safe_action)
         reward = self._calculate_reward(new_state, safe_action, previous_tx_power) - self._adaptive_penalty(new_state)
         
-        # Replace bool() with plain JAX arrays
+       
         terminated = jnp.any(new_state.qos_metrics[:, 0] > 2 * self.max_latency)
         truncated = new_state.time >= self.max_steps
         done_flag = jnp.logical_or(terminated, truncated)
         
-        # Use JAX's conditional logic without bool()
+
         timestep = jax.lax.cond(
             done_flag,
             lambda: jax.lax.cond(
-                terminated,  # Now using JAX array directly
+                terminated,  
                 lambda: termination(reward, new_state),
                 lambda: truncation(reward, new_state),
             ),
@@ -215,7 +195,7 @@ if __name__ == "__main__":
     print(f"Action mask for power level 3 on BS 0, band 0: {action_mask[0, 0, 3]}")
     
     def train(num_episodes=100):
-        params = {}  # Placeholder: in practice, use Haiku/Flax for policy network parameters.
+        params = {}  
         opt = optax.adam(1e-3)
         opt_state = opt.init(params)
         
@@ -231,5 +211,5 @@ if __name__ == "__main__":
                 
             print(f"Episode {episode} completed at step {int(state.time)}")
     
-    # Run a short training example
+   
     train(num_episodes=3)
