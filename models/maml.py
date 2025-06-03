@@ -9,7 +9,8 @@ import tensorflow_probability.substrates.jax as tfp
 from utils import flatten_state 
 import wandb
 from mLN.environment import DynamicSpectrumEnv 
-from jax import lax 
+from jax import lax
+import chex
 
 # Constants
 ROLLOUT_LENGTH = 50 
