@@ -372,6 +372,8 @@ def sample_task(env: DynamicSpectrumEnv, key: chex.PRNGKey) -> DynamicSpectrumEn
 
     fading_variation = jax.random.uniform(key_fading, (), minval=0.8, maxval=1.2)
     new_fading_coherence = env.fading_coherence * fading_variation
+    current_bandwidth_hz = getattr(env, 'bandwidth_hz', 10e6) 
+    current_noise_figure_db = getattr(env, 'noise_figure_db', 7.0) 
 
     new_env = DynamicSpectrumEnv(
         num_bs=env.num_bs,
