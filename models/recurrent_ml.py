@@ -393,8 +393,8 @@ def sample_task(env: DynamicSpectrumEnv, key: chex.PRNGKey) -> DynamicSpectrumEn
 
     fading_variation = jax.random.uniform(key_fading, (), minval=0.8, maxval=1.2)
     new_fading_coherence = env.fading_coherence * fading_variation
-    current_bandwidth_hz = getattr(env, 'bandwidth_hz', 10e6) 
-    current_noise_figure_db = getattr(env, 'noise_figure_db', 7.0) 
+    bw_hz = getattr(env, 'bandwidth_hz', 10e6)  
+    nf_db = getattr(env, 'noise_figure_db', 7.0) 
 
     new_env = DynamicSpectrumEnv(
         num_bs=env.num_bs,
@@ -402,14 +402,14 @@ def sample_task(env: DynamicSpectrumEnv, key: chex.PRNGKey) -> DynamicSpectrumEn
         num_bands=env.num_bands,
         max_steps=env.max_steps,
         max_latency=env.max_latency,
-        max_power_dbm=env.max_power_dbm, 
+        max_power_dbm=env.max_power_dbm,
         num_power_levels=env.num_power_levels,
         power_levels_dbm=env.power_levels_dbm, 
         fading_coherence=new_fading_coherence,
         max_external_interference_mW=new_max_external_interference_mW,
-        min_sinr_db=env.min_sinr_db, 
-        bandwidth_hz= getattr(env, 'bandwidth_hz', BANDWIDTH_HZ), 
-        noise_figure_db= getattr(env, 'noise_figure_db', NOISE_FIGURE_DB)
+        min_sinr_db=env.min_sinr_db,
+        bandwidth_hz=bw_hz,         
+        noise_figure_db=nf_db           
     )
     return new_env
 
