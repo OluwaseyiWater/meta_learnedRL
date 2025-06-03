@@ -383,18 +383,30 @@ def compute_meta_objective(
     return test_loss, (policy_loss, value_loss, entropy_loss_aux)
 
 
-def sample_task(env, key):
+def sample_task(env: DynamicSpectrumEnv, key: chex.PRNGKey) -> DynamicSpectrumEnv: 
     key_interf, key_fading = jax.random.split(key)
-    variation = jax.random.uniform(key_interf, (), minval=0.8, maxval=1.2)
-    new_max_interference = env.max_interference * variation
+    
+    
+    variation_interference = jax.random.uniform(key_interf, (),  minval=0.8, maxval=1.2)
+    new_max_external_interference_mW = env.max_external_interference_mW * variation_interference
+
     fading_variation = jax.random.uniform(key_fading, (), minval=0.8, maxval=1.2)
     new_fading_coherence = env.fading_coherence * fading_variation
+
     new_env = DynamicSpectrumEnv(
-        num_bs=env.num_bs, num_users=env.num_users, num_bands=env.num_bands,
-        max_steps=env.max_steps, max_latency=env.max_latency, max_power=env.max_power,
-        num_power_levels=env.num_power_levels, power_levels=env.power_levels,
-        fading_coherence=new_fading_coherence, max_interference=new_max_interference,
-        min_sinr=env.min_sinr
+        num_bs=env.num_bs,
+        num_users=env.num_users,
+        num_bands=env.num_bands,
+        max_steps=env.max_steps,
+        max_latency=env.max_latency,
+        max_power_dbm=env.max_power_dbm, 
+        num_power_levels=env.num_power_levels,
+        power_levels_dbm=env.power_levels_dbm, 
+        fading_coherence=new_fading_coherence,
+        max_external_interference_mW=new_max_external_interference_mW,
+        min_sinr_db=env.min_sinr_db, 
+        bandwidth_hz= getattr(env, 'bandwidth_hz', BANDWIDTH_HZ), 
+        noise_figure_db= getattr(env, 'noise_figure_db', NOISE_FIGURE_DB)
     )
     return new_env
 
