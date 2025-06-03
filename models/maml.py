@@ -1,4 +1,4 @@
-from jumanji.types import TimeStep
+from jumanji.types import TimeStep 
 from functools import partial
 from typing import Any, Callable, Tuple, Dict
 import haiku as hk
@@ -6,27 +6,13 @@ import jax
 import jax.numpy as jnp
 import optax
 import tensorflow_probability.substrates.jax as tfp
-from utils import flatten_state
+from utils import flatten_state 
 import wandb
 from mLN.environment import DynamicSpectrumEnv 
-
+from jax import lax 
 
 # Constants
-NUM_BS = 3
-NUM_BANDS = 4
-NUM_USERS = 5
-NUM_POWER_LEVELS = 5
-
-# Hyperparameters
-META_LR = 1e-3
-INNER_LR = 0.1
-META_BATCH_SIZE = 4 # Corresponds to num_tasks in train_maml
-NUM_INNER_STEPS = 1
-NUM_META_ITERS = 1000
 ROLLOUT_LENGTH = 50 
-DISCOUNT_FACTOR = 0.99
-NUM_META_BATCHES = 10 
-
 
 tfd = tfp.distributions
 
@@ -84,15 +70,12 @@ def make_networks(num_bs, num_bands, num_power_levels):
     value = hk.without_apply_rng(hk.transform(value_fn))
     return policy, value
 
-ObsNormalizerState = tuple  
+ObsNormalizerState = tuple
 
 def init_obs_normalizer(obs_dim: int) -> ObsNormalizerState:
     return (
-        jnp.zeros(obs_dim), 
-        jnp.ones(obs_dim) * 10.0 ,   
-        jnp.array(0),        
-        jnp.array(1e-4),     
-        jnp.array(100)       
+        jnp.zeros(obs_dim), jnp.ones(obs_dim) * 10.0, jnp.array(0),
+        jnp.array(1e-4), jnp.array(100)
     )
 
 def update_obs_normalizer(state: ObsNormalizerState, obs_batch: jnp.ndarray) -> ObsNormalizerState:
@@ -100,28 +83,28 @@ def update_obs_normalizer(state: ObsNormalizerState, obs_batch: jnp.ndarray) -> 
     batch_mean = jnp.mean(obs_batch, axis=0)
     batch_var = jnp.var(obs_batch, axis=0)
     batch_count = obs_batch.shape[0]
-
     delta = batch_mean - mean
     total_count = count + batch_count
-
     new_mean = mean + delta * batch_count / total_count
     m_a = var * count
     m_b = batch_var * batch_count
     M2 = m_a + m_b + jnp.square(delta) * count * batch_count / total_count
     new_var = M2 / total_count
-
     return (new_mean, new_var, total_count, eps, min_count)
 
+def normalize_obs(state, obs: jnp.ndarray) -> jnp.ndarray:
+    mean, var, count, eps, min_count = state
+    normed = (obs - mean) / jnp.sqrt(var + eps + 1e-8)
+    normed = jnp.clip(normed, -5.0, 5.0)
+    do_norm = count >= min_count
+    return jnp.where(do_norm, normed, jnp.clip(obs, -10.0, 10.0)) 
 
-RewardNormalizerState = tuple  
+RewardNormalizerState = tuple
 
 def init_reward_normalizer() -> RewardNormalizerState:
     return (
-        jnp.array(0.0),  
-        jnp.array(10.0),  
-        jnp.array(0),    
-        jnp.array(1e-4), 
-        jnp.array(100)   
+        jnp.array(0.0), jnp.array(10.0), jnp.array(0),
+        jnp.array(1e-4), jnp.array(100)
     )
 
 def update_reward_normalizer(state: RewardNormalizerState, rewards: jnp.ndarray) -> RewardNormalizerState:
@@ -129,234 +112,237 @@ def update_reward_normalizer(state: RewardNormalizerState, rewards: jnp.ndarray)
     batch_mean = jnp.mean(rewards)
     batch_var = jnp.var(rewards)
     batch_count = rewards.shape[0]
-
     delta = batch_mean - mean
     total_count = count + batch_count
-
     new_mean = mean + delta * batch_count / total_count
     m_a = var * count
     m_b = batch_var * batch_count
     M2 = m_a + m_b + jnp.square(delta) * count * batch_count / total_count
     new_var = M2 / total_count
-
     return (new_mean, new_var, total_count, eps, min_count)
 
-
-def normalize_obs(state, obs: jnp.ndarray) -> jnp.ndarray:
+def normalize_reward(state, rewards: jnp.ndarray) -> jnp.ndarray: 
     mean, var, count, eps, min_count = state
-    normed = (obs - mean) / jnp.sqrt(var + eps)
-    normed = jnp.clip(normed, -5.0, 5.0)
     do_norm = count >= min_count
-    return jnp.where(do_norm, normed, obs)
-
-
-def normalize_reward(state, rewards: jnp.ndarray) -> jnp.ndarray:
-    mean, var, count, eps, min_count = state
-    normed = (rewards - mean) / jnp.sqrt(var + eps)
-    normed = jnp.clip(normed, -3.0, 3.0)
-    do_norm = count >= min_count
-    return jnp.where(do_norm, normed, rewards)
+    normalized_or_raw = jnp.where(
+        do_norm,
+        (rewards - mean) / jnp.sqrt(var + eps + 1e-8),
+        rewards
+    )
+    return jnp.clip(normalized_or_raw, -5.0, 5.0)
 
 
 def sample_trajectories(
-    task_env: Any,
-    policy_params: Any,
-    value_params: Any,
-    policy_apply: Callable,
-    value_apply: Callable,
-    key: jnp.ndarray,
-    obs_norm_state: Any,
-    reward_norm_state: Any,
-    num_steps: int = ROLLOUT_LENGTH, 
-    chunk_size: int = 10,
+    task_env: Any, policy_params: Any, value_params: Any, policy_apply: Callable,
+    value_apply: Callable, key: jnp.ndarray, obs_norm_state: Any,
+    reward_norm_state: Any, num_steps: int = ROLLOUT_LENGTH, chunk_size: int = 10,
 ) -> Dict[str, jnp.ndarray]:
     state, timestep = task_env.reset(key)
     carry = (state, key)
-
-    def chunk_step(carry, _):
-        state, key = carry
-        key, subkey = jax.random.split(key)
-        obs = flatten_state(state)
-        norm_obs = normalize_obs(obs_norm_state, obs)
-
-        dist = policy_apply(policy_params, norm_obs)
-        action = dist.sample(seed=subkey).reshape(-1)
-        value = value_apply(value_params, norm_obs).squeeze()
-
-        next_state, next_t = task_env.step(state, action)
-        raw_reward = next_t.reward
-        norm_reward = normalize_reward(reward_norm_state, raw_reward)
-        done = next_t.last()
-
-        sinr_viol = jnp.sum(task_env._compute_sinr(next_state) < task_env.min_sinr)
-        qos_viol  = jnp.sum(next_state.qos_metrics[:, 0] > task_env.max_latency)
-
-        out = (norm_obs, action, norm_reward, value, done, sinr_viol, qos_viol)
-        return (next_state, key), out
-
-    if num_steps % chunk_size != 0:
-        pass
-    num_chunks = num_steps // chunk_size
     
-    if num_chunks == 0:
-        if num_steps == 0:
-            dummy_obs_shape = flatten_state(state).shape
-            dummy_action_shape = (env.num_bs * env.num_bands,) 
-            return {
-                "observations": jnp.empty((0, *dummy_obs_shape)),
-                "actions": jnp.empty((0, *dummy_action_shape)),
-                "rewards": jnp.empty((0,)), "values": jnp.empty((0,)),
-                "dones": jnp.empty((0,), dtype=bool),
-                "sinr_violations": jnp.empty((0,)), "qos_violations": jnp.empty((0,)),
-                "final_value": jnp.array(0.0),
-            }
-        carry_final, chunk_outputs_single = jax.lax.scan(chunk_step, carry, None, length=num_steps)
-        all_o, all_a, all_r, all_v, all_d, all_s, all_q = jax.tree_map(lambda x: x[jnp.newaxis, ...], chunk_outputs_single) 
-        T = num_steps
-    else:
-        def run_chunked(carry_chunk, _):
-            carry_chunk, outs_chunk = jax.lax.scan(chunk_step, carry_chunk, None, length=chunk_size)
-            return carry_chunk, outs_chunk
-        carry_final, chunk_outputs = jax.lax.scan(run_chunked, carry, None, length=num_chunks)
-        all_o, all_a, all_r, all_v, all_d, all_s, all_q = chunk_outputs
-        T = num_chunks * chunk_size
+    actual_chunk_size = chunk_size if num_steps >= chunk_size and chunk_size > 0 else num_steps
+    actual_num_chunks = num_steps // actual_chunk_size if actual_chunk_size > 0 else 0
+    remainder_steps = num_steps % actual_chunk_size if actual_chunk_size > 0 else 0
+    if num_steps == 0 : actual_num_chunks = 0; remainder_steps = 0 
 
 
-    observations    = all_o.reshape((T, -1))
-    actions         = all_a.reshape((T, all_a.shape[-1]))
-    rewards         = all_r.reshape((T,))
-    values          = all_v.reshape((T,))
-    dones           = all_d.reshape((T,))
-    sinr_violations = all_s.reshape((T,))
-    qos_violations  = all_q.reshape((T,))
+    def _chunk_step_body(carry_c, _):
+        state_c, key_c = carry_c
+        key_c, subkey_c = jax.random.split(key_c)
+        obs_c = flatten_state(state_c)
+        norm_obs_c = normalize_obs(obs_norm_state, obs_c)
+        dist_c = policy_apply(policy_params, norm_obs_c)
+        action_c = dist_c.sample(seed=subkey_c).reshape(-1)
+        value_c = value_apply(value_params, norm_obs_c).squeeze()
+        next_state_c, next_t_c = task_env.step(state_c, action_c)
+        raw_reward_c = next_t_c.reward
+        norm_reward_c = normalize_reward(reward_norm_state, raw_reward_c)
+        done_c = next_t_c.last()
+        sinr_viol_c = jnp.sum(task_env._compute_sinr(next_state_c) < task_env.min_sinr)
+        qos_viol_c = jnp.sum(next_state_c.qos_metrics[:, 0] > task_env.max_latency)
+        out_c = (norm_obs_c, action_c, norm_reward_c, raw_reward_c, value_c, done_c, sinr_viol_c, qos_viol_c)
+        return (next_state_c, key_c), out_c
 
-    final_state_val = carry_final[0]
+    all_outputs_list_components = [[] for _ in range(8)] 
+
+    if actual_num_chunks > 0:
+        def run_one_chunk(carry_runchunk, _):
+            carry_runchunk, outs_runchunk = jax.lax.scan(_chunk_step_body, carry_runchunk, None, length=actual_chunk_size)
+            return carry_runchunk, outs_runchunk
+        carry, chunked_outputs_scan = jax.lax.scan(run_one_chunk, carry, None, length=actual_num_chunks)
+        for i, component_chunk_data in enumerate(chunked_outputs_scan):
+            all_outputs_list_components[i].append(component_chunk_data.reshape((-1,) + component_chunk_data.shape[2:]))
+
+
+    if remainder_steps > 0:
+        carry, remainder_outputs_scan = jax.lax.scan(_chunk_step_body, carry, None, length=remainder_steps)
+        for i, component_rem_data in enumerate(remainder_outputs_scan):
+            all_outputs_list_components[i].append(component_rem_data) 
+
+    if num_steps == 0:
+        s_init_flat = flatten_state(state)
+        action_dim = task_env.action_spec().num_values.shape[0] if hasattr(task_env, 'action_spec') else 0
+        return {
+            "observations": jnp.empty((0, s_init_flat.shape[-1] if s_init_flat.ndim > 0 and s_init_flat.size > 0 else 0)),
+            "actions": jnp.empty((0, action_dim)), "rewards": jnp.empty((0,)),
+            "raw_rewards": jnp.empty((0,)), "values": jnp.empty((0,)),
+            "dones": jnp.empty((0,), dtype=bool), "sinr_violations": jnp.empty((0,)),
+            "qos_violations": jnp.empty((0,)), "final_value": jnp.array(0.0, dtype=jnp.float32),
+        }
+
+    final_traj_dict_keys = ["observations", "actions", "rewards", "raw_rewards", "values", "dones", "sinr_violations", "qos_violations"]
+    final_traj_dict = {}
+    for i, key_name in enumerate(final_traj_dict_keys):
+        if all_outputs_list_components[i]: 
+            final_traj_dict[key_name] = jnp.concatenate(all_outputs_list_components[i], axis=0)
+        else:
+            if key_name in ["observations"]: final_traj_dict[key_name] = jnp.empty((0, flatten_state(state).shape[-1]))
+            elif key_name in ["actions"]: final_traj_dict[key_name] = jnp.empty((0, task_env.action_spec().num_values.shape[0]))
+            else: final_traj_dict[key_name] = jnp.empty((0,))
+
+
+    final_state_val = carry[0]
     final_obs = normalize_obs(obs_norm_state, flatten_state(final_state_val))
     final_value = value_apply(value_params, final_obs).squeeze()
-
-    return {
-        "observations":    observations,
-        "actions":         actions,
-        "rewards":         rewards,
-        "values":          values,
-        "dones":           dones,
-        "sinr_violations": sinr_violations,
-        "qos_violations":  qos_violations,
-        "final_value":     final_value,
-    }
+    final_traj_dict["final_value"] = final_value
+    
+    return final_traj_dict
 
 
-def compute_gae(rewards, values, dones, final_value, gamma=0.99, lambda_=0.95):
-    episode_length = len(rewards)
-    if episode_length == 0: # Check if rewards is empty
+def compute_gae(rewards, values, dones, final_value, gamma=0.99, lambda_=0.95): 
+    episode_length_fixed = rewards.shape[0]
+    if episode_length_fixed == 0:
         return jnp.array([]), jnp.array([])
-
+        
     advantages = jnp.zeros_like(rewards)
-
     next_value = final_value
     next_advantage = 0.0
 
-    for t in reversed(range(episode_length)):
-        mask = 1.0 - dones[t].astype(jnp.float32)
+    for t in reversed(range(episode_length_fixed)):
+        is_last_step_of_episode = dones[t]
+        mask = 1.0 - is_last_step_of_episode.astype(jnp.float32)
         td_error = rewards[t] + gamma * next_value * mask - values[t]
-        
-        # Correct GAE calculation for advantage
-        advantages_t = td_error + gamma * lambda_ * next_advantage * mask
-        advantages = advantages.at[t].set(jnp.nan_to_num(advantages_t)) 
-        
+        advantages = advantages.at[t].set(td_error + gamma * lambda_ * next_advantage * mask)
         next_value = values[t]
-        next_advantage = advantages[t] 
-
+        next_advantage = advantages[t]
     returns = advantages + values
-    
-    
-    adv_mean = jnp.mean(advantages)
-    adv_std = jnp.std(advantages) + 1e-6 # Increased epsilon for stability
-    advantages = (advantages - adv_mean) / adv_std
-    advantages = jnp.nan_to_num(advantages, nan=0.0) 
 
+    actual_seq_len = episode_length_fixed 
+    indices = jnp.arange(actual_seq_len)
+    first_true_idx_or_len = jnp.min(jnp.where(dones, indices, actual_seq_len))
+    num_actual_steps = jnp.minimum(first_true_idx_or_len + 1, actual_seq_len)
+    
+
+    def normalize_advantages_fn(adv_in_operand):
+        # --- Masking approach for normalization ---
+        mask_for_norm = (jnp.arange(actual_seq_len) < num_actual_steps).astype(jnp.float32)
+        
+        sum_adv = jnp.sum(adv_in_operand * mask_for_norm)
+        # For variance calculation: E[X^2] - (E[X])^2
+        sum_sq_adv = jnp.sum(jnp.square(adv_in_operand) * mask_for_norm)
+        count_valid = jnp.maximum(jnp.sum(mask_for_norm), 1.0) 
+
+        mean = sum_adv / count_valid
+        
+        var = jnp.maximum(0.0, (sum_sq_adv / count_valid) - jnp.square(mean))
+        std = jnp.sqrt(var + 1e-6) 
+
+        normalized_advantages = (adv_in_operand - mean) / std
+        
+
+        new_adv = normalized_advantages * mask_for_norm
+        return new_adv
+        
+
+    def zeros_advantages_fn(adv_in_operand):
+        return jnp.zeros_like(adv_in_operand)
+
+    advantages = lax.cond(
+        num_actual_steps > 0, 
+        normalize_advantages_fn,
+        zeros_advantages_fn,
+        advantages 
+    )
+    
+    advantages = jnp.nan_to_num(advantages) 
     return returns, advantages
 
 
-def compute_inner_loss(policy_params, value_params, policy_apply, value_apply, traj):
+def compute_inner_loss(policy_params, value_params, policy_apply, value_apply, traj): 
     obs = traj['observations']
     actions = traj['actions']
     returns = traj['returns']
     advantages = traj['advantages']
+    dones = traj['dones']
+
+    if obs.shape[0] == 0:
+        zero_loss = jnp.array(0.0, dtype=jnp.float32)
+        return zero_loss, (zero_loss, zero_loss)
 
     action_dist = policy_apply(policy_params, obs)
-    entropy = action_dist.entropy()
-    log_probs = action_dist.log_prob(actions)
+    entropy_terms = action_dist.entropy()
+    log_prob_terms = action_dist.log_prob(actions)
 
-    if log_probs.ndim > 1 and advantages.ndim == 1:
-        advantages_reshaped = advantages.reshape((-1,) + (1,) * (log_probs.ndim - 1))
+    actual_seq_len = obs.shape[0]
+    indices = jnp.arange(actual_seq_len)
+    first_true_idx_or_len = jnp.min(jnp.where(dones, indices, actual_seq_len))
+    num_valid_steps = jnp.minimum(first_true_idx_or_len + 1, actual_seq_len)
+    valid_step_mask_float = (jnp.arange(actual_seq_len) < num_valid_steps).astype(jnp.float32)
+    count_valid_steps = jnp.sum(valid_step_mask_float)
+    safe_count_valid_steps = jnp.maximum(count_valid_steps, 1.0)
+
+    if log_prob_terms.ndim > 1 and advantages.ndim == 1:
+        advantages_reshaped = advantages.reshape((-1,) + (1,) * (log_prob_terms.ndim - 1))
     else:
         advantages_reshaped = advantages
+    
+    mask_for_terms = valid_step_mask_float
+    if log_prob_terms.ndim > 1:
+        mask_for_terms = jnp.expand_dims(valid_step_mask_float, axis=tuple(range(1, log_prob_terms.ndim)))
 
-    policy_loss = -jnp.mean(log_probs * advantages_reshaped) - 0.01 * jnp.mean(entropy)
-    policy_loss = jnp.clip(policy_loss, -100.0, 100.0)
+    policy_loss_val = -jnp.sum(log_prob_terms * advantages_reshaped * mask_for_terms) / safe_count_valid_steps \
+                      - 0.01 * jnp.sum(entropy_terms * mask_for_terms) / safe_count_valid_steps
+    policy_loss_val = jnp.clip(policy_loss_val, -100.0, 100.0)
+    policy_loss_val = jnp.where(count_valid_steps > 0, policy_loss_val, 0.0)
 
-
-    values_pred = value_apply(value_params, obs).squeeze() 
+    values_pred = value_apply(value_params, obs).squeeze()
     values_pred = jnp.nan_to_num(values_pred, nan=0.0)
-    value_loss = jnp.mean(jnp.square(returns - values_pred))
-    value_loss = jnp.clip(value_loss, 0.0, 100.0)
+    value_loss_val = jnp.sum(jnp.square(returns - values_pred) * valid_step_mask_float) / safe_count_valid_steps
+    value_loss_val = jnp.clip(value_loss_val, 0.0, 100.0)
+    value_loss_val = jnp.where(count_valid_steps > 0, value_loss_val, 0.0)
 
-
-    combined_loss = policy_loss + 0.3 * value_loss
-
-    return combined_loss, (policy_loss, value_loss)
+    combined_loss = policy_loss_val + 0.3 * value_loss_val
+    return combined_loss, (policy_loss_val, value_loss_val)
 
 
 def inner_adaptation(policy_params, value_params, policy_apply, value_apply, traj, inner_lr, inner_steps):
-
     def adaptation_step(carry, _):
         curr_policy_params, curr_value_params = carry
-        
-
-
         grad_fn = jax.value_and_grad(
-            lambda p_tuple: compute_inner_loss( 
-                p_tuple[0], p_tuple[1], policy_apply, value_apply, traj 
-            )[0], 
-            argnums=0, 
-            has_aux=False
+            lambda p_tuple: compute_inner_loss(
+                p_tuple[0], p_tuple[1], policy_apply, value_apply, traj
+            )[0], argnums=0, has_aux=False
         )
         inner_loss, grads_tuple = grad_fn((curr_policy_params, curr_value_params))
-        policy_grads, value_grads = grads_tuple 
-
+        policy_grads, value_grads = grads_tuple
         policy_grads = jax.tree_map(lambda g: jnp.clip(g, -1.0, 1.0), policy_grads)
         value_grads = jax.tree_map(lambda g: jnp.clip(g, -1.0, 1.0), value_grads)
-
-        new_policy_params = jax.tree_map(
-            lambda p, g: p - inner_lr * g, curr_policy_params, policy_grads
-        )
-        new_value_params = jax.tree_map(
-            lambda p, g: p - inner_lr * g, curr_value_params, value_grads
-        )
-
-        return (new_policy_params, new_value_params), inner_loss 
+        new_policy_params = jax.tree_map(lambda p, g: p - inner_lr * g, curr_policy_params, policy_grads)
+        new_value_params = jax.tree_map(lambda p, g: p - inner_lr * g, curr_value_params, value_grads)
+        return (new_policy_params, new_value_params), inner_loss
 
     init_params_tuple = (policy_params, value_params)
-    (adapted_policy_params, adapted_value_params), inner_losses = jax.lax.scan(
-        adaptation_step,
-        init_params_tuple,
-        None,
-        length=inner_steps
+    (adapted_policy_params, adapted_value_params), _ = jax.lax.scan(
+        adaptation_step, init_params_tuple, None, length=inner_steps
     )
-
     return adapted_policy_params, adapted_value_params
 
 
 def prepare_trajectory(traj, value_params, value_apply):
     if traj['observations'].shape[0] == 0:
         return {**traj, 'returns': jnp.array([]), 'advantages': jnp.array([])}
-
     returns, advantages = compute_gae(
-        traj['rewards'],
-        traj['values'],
-        traj['dones'],
-        traj['final_value']
+        traj['rewards'], traj['values'], traj['dones'], traj['final_value']
     )
     return {**traj, 'returns': returns, 'advantages': advantages}
 
@@ -364,201 +350,135 @@ def prepare_trajectory(traj, value_params, value_apply):
 def compute_meta_objective(init_params, train_traj, test_traj,
                           policy_apply, value_apply, inner_lr, inner_steps):
     init_policy_params, init_value_params = init_params
-
-
     adapted_policy_params, adapted_value_params = inner_adaptation(
         init_policy_params, init_value_params,
         policy_apply, value_apply,
-        train_traj, inner_lr, inner_steps 
+        train_traj, inner_lr, inner_steps
     )
-
     test_loss, (policy_loss, value_loss) = compute_inner_loss(
         adapted_policy_params, adapted_value_params,
-        policy_apply, value_apply, test_traj 
+        policy_apply, value_apply, test_traj
     )
-
     return test_loss, (policy_loss, value_loss)
 
 
 def sample_task(env, key):
     key_interference, key_fading = jax.random.split(key)
-
     variation_interference = jax.random.uniform(key_interference, (),  minval=0.9, maxval=1.1)
     new_max_interference = env.max_interference * variation_interference
-
     fading_var = jax.random.uniform(key_fading, (), minval=0.9, maxval=1.1)
     new_fading = env.fading_coherence * fading_var
-
     new_env = DynamicSpectrumEnv(
-        num_bs=env.num_bs,
-        num_users=env.num_users,
-        num_bands=env.num_bands,
-        max_steps=env.max_steps,
-        max_latency=env.max_latency,
-        max_power=env.max_power,
-        num_power_levels=env.num_power_levels,
-        power_levels=env.power_levels,
-        fading_coherence=new_fading,
-        max_interference=new_max_interference,
+        num_bs=env.num_bs, num_users=env.num_users, num_bands=env.num_bands,
+        max_steps=env.max_steps, max_latency=env.max_latency, max_power=env.max_power,
+        num_power_levels=env.num_power_levels, power_levels=env.power_levels,
+        fading_coherence=new_fading, max_interference=new_max_interference,
         min_sinr=env.min_sinr
     )
     return new_env
 
-def compute_meta_objective_for_task(
-    params: Tuple[Any, Any],       
-    env: Any,                      
-    policy_apply: Any,
-    value_apply: Any,
-    task_key: jnp.ndarray,         
-    inner_lr: float,
-    inner_steps: int,
-    obs_norm_state: ObsNormalizerState,    
-    reward_norm_state: RewardNormalizerState 
-) -> Tuple[jnp.ndarray, ObsNormalizerState, RewardNormalizerState, Dict[str, Any], Dict[str, Any]]:
 
+def compute_meta_objective_for_task(
+    params: Tuple[Any, Any], env: Any, policy_apply: Any, value_apply: Any,
+    task_key: jnp.ndarray, inner_lr: float, inner_steps: int,
+    obs_norm_state: ObsNormalizerState, reward_norm_state: RewardNormalizerState,
+    rollout_len_static: int # Made explicit
+) -> Tuple[jnp.ndarray, ObsNormalizerState, RewardNormalizerState, Dict[str, Any]]:
     task_sample_key, train_traj_key, test_traj_key = jax.random.split(task_key, 3)
-    policy_params, value_params = params 
+    policy_params, value_params = params
     task_env_instance = sample_task(env, task_sample_key)
+
     train_traj_raw = sample_trajectories(
         task_env_instance, policy_params, value_params, policy_apply, value_apply, train_traj_key,
-        obs_norm_state, reward_norm_state, num_steps=ROLLOUT_LENGTH 
+        obs_norm_state, reward_norm_state, num_steps=rollout_len_static
     )
     train_traj_prepared = prepare_trajectory(train_traj_raw, value_params, value_apply)
+    
     adapted_policy_params, adapted_value_params = inner_adaptation(
         policy_params, value_params, policy_apply, value_apply,
-        train_traj_prepared, 
-        inner_lr, inner_steps
+        train_traj_prepared, inner_lr, inner_steps
     )
     test_traj_raw = sample_trajectories(
         task_env_instance, adapted_policy_params, adapted_value_params, policy_apply, value_apply, test_traj_key,
-        obs_norm_state, reward_norm_state, num_steps=ROLLOUT_LENGTH 
+        obs_norm_state, reward_norm_state, num_steps=rollout_len_static
     )
     test_traj_prepared = prepare_trajectory(test_traj_raw, adapted_value_params, value_apply)
-    meta_loss_this_task, (policy_loss_on_test, value_loss_on_test) = compute_inner_loss(
-        adapted_policy_params, adapted_value_params,
-        policy_apply, value_apply, test_traj_prepared
+    
+    meta_loss_this_task, (policy_loss_on_test, value_loss_on_test) = compute_meta_objective(
+        params, train_traj_prepared, test_traj_prepared,
+        policy_apply, value_apply, inner_lr, inner_steps
     )
-    obs_to_normalize = []
-    if train_traj_raw['observations'].shape[0] > 0:
-        obs_to_normalize.append(train_traj_raw['observations'])
-    if test_traj_raw['observations'].shape[0] > 0:
-        obs_to_normalize.append(test_traj_raw['observations'])
 
+    obs_to_normalize = []
+    if train_traj_raw['observations'].shape[0] > 0: obs_to_normalize.append(train_traj_raw['observations'])
+    if test_traj_raw['observations'].shape[0] > 0: obs_to_normalize.append(test_traj_raw['observations'])
     rewards_to_normalize = []
-    if train_traj_raw['rewards'].shape[0] > 0: 
-        rewards_to_normalize.append(train_traj_raw['rewards']) 
-    if test_traj_raw['rewards'].shape[0] > 0:
-        rewards_to_normalize.append(test_traj_raw['rewards'])
+    if 'raw_rewards' in train_traj_raw and train_traj_raw['raw_rewards'].shape[0] > 0:
+        rewards_to_normalize.append(train_traj_raw['raw_rewards'])
+    if 'raw_rewards' in test_traj_raw and test_traj_raw['raw_rewards'].shape[0] > 0:
+        rewards_to_normalize.append(test_traj_raw['raw_rewards'])
 
     current_task_obs_norm_state = obs_norm_state
     if obs_to_normalize:
         all_obs_this_task = jnp.concatenate(obs_to_normalize, axis=0)
         current_task_obs_norm_state = update_obs_normalizer(obs_norm_state, all_obs_this_task)
-
     current_task_reward_norm_state = reward_norm_state
     if rewards_to_normalize:
         all_rewards_this_task = jnp.concatenate(rewards_to_normalize, axis=0)
         current_task_reward_norm_state = update_reward_normalizer(reward_norm_state, all_rewards_this_task)
+    
     aux_info = {"train_rewards_mean": jnp.mean(train_traj_prepared.get('rewards', jnp.array(0.0))),
                 "test_rewards_mean": jnp.mean(test_traj_prepared.get('rewards', jnp.array(0.0)))}
-
-
     return meta_loss_this_task, current_task_obs_norm_state, current_task_reward_norm_state, aux_info
 
-def adapt_to_task(
-    meta_params: Tuple[Any, Any],       
-    env_instance: Any,                  
-    policy_apply: Callable,
-    value_apply: Callable,
-    adaptation_key: jnp.ndarray,        
-    inner_lr: float,                    
-    num_adaptation_steps: int,          
-    obs_norm_state: ObsNormalizerState, 
-    reward_norm_state: RewardNormalizerState, 
-    rollout_length_adaptation: int = ROLLOUT_LENGTH 
-) -> Tuple[Any, Any]: 
-    """
-    Adapts the meta-learned parameters to a specific task environment for evaluation.
-    """
-    meta_policy_params, meta_value_params = meta_params
 
-    if num_adaptation_steps == 0:
-        return meta_params 
+def adapt_to_task(
+    meta_params: Tuple[Any, Any], env_instance: Any, policy_apply: Callable, value_apply: Callable,
+    adaptation_key: jnp.ndarray, inner_lr: float, num_adaptation_steps: int,
+    obs_norm_state: ObsNormalizerState, reward_norm_state: RewardNormalizerState,
+    rollout_length_adaptation: int = ROLLOUT_LENGTH
+) -> Tuple[Any, Any]:
+    meta_policy_params, meta_value_params = meta_params
+    if num_adaptation_steps == 0: return meta_params
 
     def adaptation_scan_body(carry_params_tuple, key_for_step):
         current_policy_p, current_value_p = carry_params_tuple
-        
-        
         support_traj_raw = sample_trajectories(
-            task_env=env_instance,
-            policy_params=current_policy_p, 
-            value_params=current_value_p,
-            policy_apply=policy_apply,
-            value_apply=value_apply,
-            key=key_for_step,
-            obs_norm_state=obs_norm_state,
-            reward_norm_state=reward_norm_state,
+            task_env=env_instance, policy_params=current_policy_p, value_params=current_value_p,
+            policy_apply=policy_apply, value_apply=value_apply, key=key_for_step,
+            obs_norm_state=obs_norm_state, reward_norm_state=reward_norm_state,
             num_steps=rollout_length_adaptation
         )
-
-       
         if support_traj_raw['observations'].shape[0] == 0:
-            return (current_policy_p, current_value_p), None 
-
-        
+            return (current_policy_p, current_value_p), jnp.array(0.0)
         support_traj_prepared = prepare_trajectory(support_traj_raw, current_value_p, value_apply)
-
         grad_fn = jax.value_and_grad(
             lambda p_tuple: compute_inner_loss(
                 p_tuple[0], p_tuple[1], policy_apply, value_apply, support_traj_prepared
-            )[0], 
-            argnums=0, has_aux=False
+            )[0], argnums=0, has_aux=False
         )
         adaptation_loss, (policy_g, value_g) = grad_fn((current_policy_p, current_value_p))
-
-        # Apply gradient update (SGD)
-        adapted_policy_p = jax.tree_map(
-            lambda p, g: p - inner_lr * g, current_policy_p, policy_g
-        )
-        adapted_value_p = jax.tree_map(
-            lambda p, g: p - inner_lr * g, current_value_p, value_g
-        )
+        adapted_policy_p = jax.tree_map(lambda p, g: p - inner_lr * g, current_policy_p, policy_g)
+        adapted_value_p = jax.tree_map(lambda p, g: p - inner_lr * g, current_value_p, value_g)
         return (adapted_policy_p, adapted_value_p), adaptation_loss
 
     adaptation_step_keys = jax.random.split(adaptation_key, num_adaptation_steps)
-    
     initial_adapt_params = (meta_policy_params, meta_value_params)
-    
-    (final_adapted_policy_params, final_adapted_value_params), adaptation_losses = jax.lax.scan(
-        adaptation_scan_body,
-        initial_adapt_params,
-        adaptation_step_keys
+    (final_adapted_policy_params, final_adapted_value_params), _ = jax.lax.scan(
+        adaptation_scan_body, initial_adapt_params, adaptation_step_keys
     )
-    
     return (final_adapted_policy_params, final_adapted_value_params)
 
+
 def train_maml(
-    env: Any, 
-    policy_params: Any, 
-    value_params: Any,  
-    policy_apply: Callable,
-    value_apply: Callable,
-    num_tasks: int, 
-    inner_lr: float,
-    inner_steps: int,
-    meta_lr: float,
-    num_iterations: int, 
-    dim: int, 
-    key: jnp.ndarray, 
-    eval_interval: int = 10,
-    num_eval_tasks: int = 5, # Number of tasks for evaluation
-    wandb_project: str = "maml-training",
-    wandb_name: str = None,
-    use_wandb: bool = True,
+    env: Any, policy_params: Any, value_params: Any, policy_apply: Callable, value_apply: Callable,
+    num_tasks: int, inner_lr: float, inner_steps: int, meta_lr: float, num_iterations: int,
+    dim: int, key: jnp.ndarray, eval_interval: int = 10, num_eval_tasks: int = 5,
+    wandb_project: str = "maml-training", wandb_name: str = None, use_wandb: bool = True,
+    rollout_len_config: int = ROLLOUT_LENGTH
 ) -> Tuple[Tuple[Any,Any], Dict[str, list]]:
 
     initial_meta_params = (policy_params, value_params)
-
     lr_schedule = optax.exponential_decay(init_value=meta_lr, transition_steps=1000, decay_rate=0.95)
     optimizer = optax.chain(optax.clip(1.0), optax.adam(lr_schedule))
 
@@ -566,169 +486,164 @@ def train_maml(
         wandb.init(project=wandb_project, name=wandb_name, config={
             "num_tasks_per_meta_batch": num_tasks, "inner_lr": inner_lr, "inner_steps": inner_steps,
             "meta_lr": meta_lr, "num_iterations": num_iterations, "obs_dim": dim,
-            "eval_interval": eval_interval, "num_eval_tasks": num_eval_tasks
+            "eval_interval": eval_interval, "num_eval_tasks": num_eval_tasks,
+            "rollout_len": rollout_len_config
         })
 
     key, meta_iteration_keys_key = jax.random.split(key)
     meta_iteration_keys = jax.random.split(meta_iteration_keys_key, num_iterations)
-
-    @jax.jit
-    def meta_iteration_update_step(carry_main_loop, key_for_meta_iter):
+    
+   
+    @partial(jax.jit, static_argnames=("num_tasks_static", "policy_apply_static", "value_apply_static", 
+                                       "inner_lr_static", "inner_steps_static", "rollout_len_static_arg", "env_static"))
+    def meta_iteration_update_step(
+        carry_main_loop, key_for_meta_iter,
+        num_tasks_static, policy_apply_static, value_apply_static, inner_lr_static, 
+        inner_steps_static, rollout_len_static_arg, env_static 
+    ):
         (current_meta_p, current_opt_s, current_obs_norm_s, current_reward_norm_s) = carry_main_loop
-        
-        task_keys_for_this_meta_batch = jax.random.split(key_for_meta_iter, num_tasks)
+        task_keys_for_this_meta_batch = jax.random.split(key_for_meta_iter, num_tasks_static)
         zero_grads = jax.tree_map(jnp.zeros_like, current_meta_p)
 
-        # Function to process one task within the meta-batch
         def process_one_task_in_meta_batch(carry_task_scan, task_key_for_grad):
             acc_grads_task, obs_norm_s_task, reward_norm_s_task = carry_task_scan
             
-            def task_loss_and_aux_fn(meta_p_for_grad):
-                loss, obs_n_upd, reward_n_upd, aux = compute_meta_objective_for_task(
-                    meta_p_for_grad, env, policy_apply, value_apply,
-                    task_key_for_grad, inner_lr, inner_steps,
-                    obs_norm_s_task, reward_norm_s_task
+    
+            def grad_target_fn(p_for_grad):
+                # compute_meta_objective_for_task returns: loss, new_obs_norm, new_reward_norm, aux
+                loss_val, _, _, _ = compute_meta_objective_for_task(
+                    p_for_grad, env_static, policy_apply_static, value_apply_static,
+                    task_key_for_grad, inner_lr_static, inner_steps_static,
+                    obs_norm_s_task, reward_norm_s_task,
+                    rollout_len_static=rollout_len_static_arg
                 )
-                return loss, (obs_n_upd, reward_n_upd, aux)
+                return loss_val
 
-            (loss_this_task, (obs_norm_updated_after_task, reward_norm_updated_after_task, aux_info_task)), grads_this_task = \
-                jax.value_and_grad(task_loss_and_aux_fn, has_aux=True)(current_meta_p)
+
+            loss_this_task, updated_obs_norm_s_after_task, updated_reward_norm_s_after_task, aux_info_this_task = \
+                compute_meta_objective_for_task(
+                    current_meta_p, env_static, policy_apply_static, value_apply_static,
+                    task_key_for_grad, inner_lr_static, inner_steps_static,
+                    obs_norm_s_task, reward_norm_s_task,
+                    rollout_len_static=rollout_len_static_arg
+                )
+            grads_this_task = jax.grad(grad_target_fn)(current_meta_p)
+
 
             new_acc_grads_task = jax.tree_map(lambda x, y: x + y, acc_grads_task, grads_this_task)
-            
-            return (new_acc_grads_task, obs_norm_updated_after_task, reward_norm_updated_after_task), \
-                   (loss_this_task, aux_info_task)
+            return (new_acc_grads_task, updated_obs_norm_s_after_task, updated_reward_norm_s_after_task), \
+                   (loss_this_task, aux_info_this_task) 
 
         initial_task_scan_carry = (zero_grads, current_obs_norm_s, current_reward_norm_s)
-        
         (final_acc_grads_meta_batch, final_obs_norm_s_meta_batch, final_reward_norm_s_meta_batch), \
-        (per_task_losses_meta_batch, per_task_aux_info_meta_batch) = jax.lax.scan(
-            process_one_task_in_meta_batch,
-            initial_task_scan_carry,
-            task_keys_for_this_meta_batch
+        (per_task_losses_meta_batch, _) = lax.scan( 
+            process_one_task_in_meta_batch, initial_task_scan_carry, task_keys_for_this_meta_batch
         )
 
-        avg_grads_meta_batch = jax.tree_map(lambda g: g / num_tasks, final_acc_grads_meta_batch)
+        avg_grads_meta_batch = jax.tree_map(lambda g: g / num_tasks_static, final_acc_grads_meta_batch)
         avg_loss_meta_batch = jnp.mean(per_task_losses_meta_batch)
-
         updates, new_opt_s = optimizer.update(avg_grads_meta_batch, current_opt_s, current_meta_p)
         new_meta_p = optax.apply_updates(current_meta_p, updates)
-        
         next_carry_main_loop = (new_meta_p, new_opt_s, final_obs_norm_s_meta_batch, final_reward_norm_s_meta_batch)
-        
-        metrics_for_this_iteration = {
-            "meta_loss": avg_loss_meta_batch,
-            "grad_norm": optax.global_norm(avg_grads_meta_batch),
-        }
-           
+        metrics_for_this_iteration = {"meta_loss": avg_loss_meta_batch, "grad_norm": optax.global_norm(avg_grads_meta_batch)}
         return next_carry_main_loop, metrics_for_this_iteration
-    obs_norm_state_initial = init_obs_normalizer(dim)
-    reward_norm_state_initial = init_reward_normalizer()
-    opt_state_initial = optimizer.init(initial_meta_params)
-    initial_main_loop_scan_carry = (initial_meta_params, opt_state_initial, obs_norm_state_initial, reward_norm_state_initial)
 
-    (final_meta_p_tuple, _, final_obs_norm_s_overall, final_reward_norm_s_overall), iteration_metrics_all = jax.lax.scan(
-        meta_iteration_update_step,
-        initial_main_loop_scan_carry,
-        meta_iteration_keys 
-    )
-    
-    trained_params = final_meta_p_tuple 
+    # Initialize states for the Python loop over iterations
+    current_params_loop = initial_meta_params
+    current_obs_norm_state_loop = init_obs_normalizer(dim)
+    current_reward_norm_state_loop = init_reward_normalizer()
+    current_opt_state_loop = optimizer.init(initial_meta_params)
 
+    # History lists
     meta_losses_log = []
     avg_pre_rewards_log, avg_post_rewards_log, avg_reward_improvements_log = [], [], []
     avg_pre_sinrs_log, avg_post_sinrs_log, avg_sinr_improvements_log = [], [], []
     avg_pre_qoss_log, avg_post_qoss_log, avg_qos_improvements_log = [], [], []
 
     for iter_idx in range(num_iterations):
-        current_iter_loss = float(iteration_metrics_all["meta_loss"][iter_idx])
+         #JIT cache periodically
+        if iter_idx > 0 and iter_idx % 20 == 0:
+            print(f"DEBUG: Clearing JAX JIT caches at iteration {iter_idx}")
+            jax.clear_caches()
+        
+
+        
+        (next_params_loop, next_opt_state_loop, next_obs_norm_loop, next_reward_norm_loop), metrics_iter = \
+            meta_iteration_update_step(
+                (current_params_loop, current_opt_state_loop, current_obs_norm_state_loop, current_reward_norm_state_loop),
+                meta_iteration_keys[iter_idx],
+                num_tasks, policy_apply, value_apply, inner_lr, inner_steps, rollout_len_config, env
+            )
+        
+       
+        current_params_loop = next_params_loop
+        current_opt_state_loop = next_opt_state_loop
+        current_obs_norm_state_loop = next_obs_norm_loop
+        current_reward_norm_state_loop = next_reward_norm_loop
+        
+        current_iter_loss = float(metrics_iter["meta_loss"])
         meta_losses_log.append(current_iter_loss)
 
         log_payload = {"iteration": iter_idx, "meta_loss": current_iter_loss}
         
-        if iter_idx % eval_interval == 0:
+        if iter_idx % eval_interval == 0 or iter_idx == num_iterations - 1:
+            params_for_eval = current_params_loop
+            obs_norm_for_eval = current_obs_norm_state_loop
+            reward_norm_for_eval = current_reward_norm_state_loop
             
-            key, eval_master_key = jax.random.split(meta_iteration_keys[iter_idx]) 
-            eval_task_keys = jax.random.split(eval_master_key, num_eval_tasks)
-
-            pre_rewards_batch, post_rewards_batch = [], []
-            pre_sinrs_batch, post_sinrs_batch = [], []
-            pre_qoss_batch, post_qoss_batch = [], []
-
-            params_for_eval = trained_params
-            obs_norm_for_eval = final_obs_norm_s_overall
-            reward_norm_for_eval = final_reward_norm_s_overall
-
-            for eval_task_key_single in eval_task_keys:
-                eval_task_env = sample_task(env, eval_task_key_single)
-                key_s, pre_traj_key, adapt_key, post_traj_key = jax.random.split(eval_task_key_single, 4)
-
-                pre_traj_eval = sample_trajectories(
-                    eval_task_env, params_for_eval[0], params_for_eval[1],
-                    policy_apply, value_apply, pre_traj_key,
-                    obs_norm_for_eval, reward_norm_for_eval, num_steps=ROLLOUT_LENGTH
-                )
-                if pre_traj_eval['observations'].shape[0] > 0:
-                    pre_rewards_batch.append(jnp.mean(pre_traj_eval["rewards"]))
-                    pre_sinrs_batch.append(jnp.mean(pre_traj_eval["sinr_violations"]))
-                    pre_qoss_batch.append(jnp.mean(pre_traj_eval["qos_violations"]))
-
-                # Adapt parameters
-                adapted_params_eval = adapt_to_task(
-                    meta_params=params_for_eval,
-                    env_instance=eval_task_env,
-                    policy_apply=policy_apply,
-                    value_apply=value_apply,
-                    adaptation_key=adapt_key,
-                    inner_lr=inner_lr, 
-                    num_adaptation_steps=inner_steps, 
-                    obs_norm_state=obs_norm_for_eval,
-                    reward_norm_state=reward_norm_for_eval,
-                    rollout_length_adaptation=ROLLOUT_LENGTH
-                )
-
-                # Post-adaptation evaluation
-                post_traj_eval = sample_trajectories(
-                    eval_task_env, adapted_params_eval[0], adapted_params_eval[1],
-                    policy_apply, value_apply, post_traj_key,
-                    obs_norm_for_eval, reward_norm_for_eval, num_steps=ROLLOUT_LENGTH
-                )
-                if post_traj_eval['observations'].shape[0] > 0:
-                    post_rewards_batch.append(jnp.mean(post_traj_eval["rewards"]))
-                    post_sinrs_batch.append(jnp.mean(post_traj_eval["sinr_violations"]))
-                    post_qoss_batch.append(jnp.mean(post_traj_eval["qos_violations"]))
             
-            if pre_rewards_batch: 
-                apr = jnp.mean(jnp.array(pre_rewards_batch))
-                apsr = jnp.mean(jnp.array(post_rewards_batch)) if post_rewards_batch else apr
+            key_eval_iter, eval_master_key_loop = jax.random.split(meta_iteration_keys[iter_idx]) 
+            eval_task_keys_loop = jax.random.split(eval_master_key_loop, num_eval_tasks)
+            
+            pre_rewards_b, post_rewards_b = [], []
+            pre_sinrs_b, post_sinrs_b = [], []
+            pre_qoss_b, post_qoss_b = [], []
+
+            for eval_tk_single in eval_task_keys_loop:
+                eval_task_sample_key, eval_traj_master_key = jax.random.split(eval_tk_single)
+                eval_task_env_loop = sample_task(env, eval_task_sample_key)
+                
+                pre_key, adapt_key_loop, post_key = jax.random.split(eval_traj_master_key, 3)
+
+                pre_traj_ev = sample_trajectories(eval_task_env_loop, params_for_eval[0], params_for_eval[1], policy_apply, value_apply, pre_key, obs_norm_for_eval, reward_norm_for_eval, num_steps=rollout_len_config)
+                if pre_traj_ev['observations'].shape[0] > 0:
+                    pre_rewards_b.append(jnp.mean(pre_traj_ev["rewards"]))
+                    pre_sinrs_b.append(jnp.mean(pre_traj_ev["sinr_violations"]))
+                    pre_qoss_b.append(jnp.mean(pre_traj_ev["qos_violations"]))
+                
+                adapted_p_ev = adapt_to_task(params_for_eval, eval_task_env_loop, policy_apply, value_apply, adapt_key_loop, inner_lr, inner_steps, obs_norm_for_eval, reward_norm_for_eval, rollout_length_adaptation=rollout_len_config)
+                post_traj_ev = sample_trajectories(eval_task_env_loop, adapted_p_ev[0], adapted_p_ev[1], policy_apply, value_apply, post_key, obs_norm_for_eval, reward_norm_for_eval, num_steps=rollout_len_config)
+                if post_traj_ev['observations'].shape[0] > 0:
+                    post_rewards_b.append(jnp.mean(post_traj_ev["rewards"]))
+                    post_sinrs_b.append(jnp.mean(post_traj_ev["sinr_violations"]))
+                    post_qoss_b.append(jnp.mean(post_traj_ev["qos_violations"]))
+
+            if pre_rewards_b: 
+                apr = jnp.mean(jnp.array(pre_rewards_b))
+                apsr = jnp.mean(jnp.array(post_rewards_b) if post_rewards_b else jnp.array(pre_rewards_b)) 
                 asi = apsr - apr
                 avg_pre_rewards_log.append(float(apr)); avg_post_rewards_log.append(float(apsr)); avg_reward_improvements_log.append(float(asi))
                 log_payload.update({"avg_pre_reward": float(apr), "avg_post_reward": float(apsr), "avg_reward_improvement": float(asi)})
-
-            if pre_sinrs_batch:
-                aps = jnp.mean(jnp.array(pre_sinrs_batch))
-                aops = jnp.mean(jnp.array(post_sinrs_batch)) if post_sinrs_batch else aps
-                assi = aps - aops 
+            if pre_sinrs_b:
+                aps = jnp.mean(jnp.array(pre_sinrs_b))
+                aops = jnp.mean(jnp.array(post_sinrs_b) if post_sinrs_b else jnp.array(pre_sinrs_b))
+                assi = aps - aops
                 avg_pre_sinrs_log.append(float(aps)); avg_post_sinrs_log.append(float(aops)); avg_sinr_improvements_log.append(float(assi))
                 log_payload.update({"avg_pre_sinr_violation": float(aps), "avg_post_sinr_violation": float(aops), "avg_sinr_improvement": float(assi)})
-
-            if pre_qoss_batch:
-                apq = jnp.mean(jnp.array(pre_qoss_batch))
-                apoq = jnp.mean(jnp.array(post_qoss_batch)) if post_qoss_batch else apq
-                asqi = apq - apoq 
+            if pre_qoss_b:
+                apq = jnp.mean(jnp.array(pre_qoss_b))
+                apoq = jnp.mean(jnp.array(post_qoss_b) if post_qoss_b else jnp.array(pre_qoss_b))
+                asqi = apq - apoq
                 avg_pre_qoss_log.append(float(apq)); avg_post_qoss_log.append(float(apoq)); avg_qos_improvements_log.append(float(asqi))
                 log_payload.update({"avg_pre_qos_violation": float(apq), "avg_post_qos_violation": float(apoq), "avg_qos_improvement": float(asqi)})
-            
-            print(f"[Iter {iter_idx}] meta_loss={current_iter_loss:.3f} "
+
+            print(f"[Iter {iter_idx}] meta_loss={log_payload.get('meta_loss', 0.0):.3f} "
                   f"pre_r={log_payload.get('avg_pre_reward', 0.0):.3f} post_r={log_payload.get('avg_post_reward', 0.0):.3f}")
+            if use_wandb: wandb.log(log_payload, step=iter_idx)
 
-        if use_wandb:
-            wandb.log(log_payload, step=iter_idx)
+    trained_params = current_params_loop
 
-
-    if use_wandb:
-        wandb.finish()
-
+    if use_wandb: wandb.finish()
     history = {
         "meta_losses": meta_losses_log,
         "avg_pre_rewards": avg_pre_rewards_log, "avg_post_rewards": avg_post_rewards_log, "avg_reward_improvements": avg_reward_improvements_log,
