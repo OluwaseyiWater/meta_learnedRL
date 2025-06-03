@@ -9,6 +9,7 @@ import wandb
 from mLN.environment import DynamicSpectrumEnv 
 from jax import lax
 from functools import partial
+import chex
 
 tfd = tfp.distributions
 
