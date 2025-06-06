@@ -1,9 +1,18 @@
-num_meta_iterations : 100
-num_tasks_per_batch : 8
+num_meta_iterations : 200
+num_tasks_per_batch : 2
 inner_steps : 5
 meta_lr : 1e-4
-inner_lr : 1e-4
-clip_ratio : 0.2
+inner_lr : 1e-3
+rollout_len: 20
+clip_ratio : 0.1
 wandb_project: "recurrent-maml-ppo"  
 wandb_name: null                    
 use_wandb: true
+# recurrent_ml:
+#   num_tasks_per_batch: 2        # Reduce from higher values
+#   inner_lr: 0.001              # Reduce from 0.01
+#   inner_steps: 3               # Reduce from 5
+#   meta_lr: 0.0001              # Reduce from 0.001
+#   clip_ratio: 0.1              # Reduce from 0.2
+#   rollout_len: 20              # Reduce from 50
+#   num_meta_iterations: 200     # Can start smaller for testing
