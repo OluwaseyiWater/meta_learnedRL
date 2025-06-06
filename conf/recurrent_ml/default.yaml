@@ -3,7 +3,6 @@ num_tasks_per_batch : 2
 inner_steps : 5
 meta_lr : 1e-4
 inner_lr : 1e-3
-rollout_len: 20
 clip_ratio : 0.1
 wandb_project: "recurrent-maml-ppo"  
 wandb_name: null                    
