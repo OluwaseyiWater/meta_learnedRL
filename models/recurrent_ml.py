@@ -1,4 +1,3 @@
-%%writefile models/recurrent_ml.py
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -108,8 +107,8 @@ ObsNormalizerState = tuple
 
 def init_obs_normalizer(obs_dim: int) -> ObsNormalizerState:
     return (
-        jnp.zeros(obs_dim), jnp.ones(obs_dim), jnp.array(0),  # Start with unit variance
-        jnp.array(1e-4), jnp.array(50)  # Reduced min_count for faster normalization
+        jnp.zeros(obs_dim), jnp.ones(obs_dim), jnp.array(0),  
+        jnp.array(1e-4), jnp.array(50)  
     )
 
 def update_obs_normalizer(state: ObsNormalizerState, obs_batch: jnp.ndarray) -> ObsNormalizerState:
@@ -128,9 +127,8 @@ def update_obs_normalizer(state: ObsNormalizerState, obs_batch: jnp.ndarray) -> 
 
 def normalize_obs(state, obs):
     mean, var, count, eps, min_count = state
-    # More conservative normalization
     normed = (obs - mean) / jnp.sqrt(var + eps + 1e-6)
-    normed = jnp.clip(normed, -3.0, 3.0)  # Tighter clipping
+    normed = jnp.clip(normed, -3.0, 3.0)  
     do_norm = count >= min_count
     return jnp.where(do_norm, normed, jnp.clip(obs, -3.0, 3.0)) 
 
@@ -138,11 +136,11 @@ RewardNormalizerState = tuple
 
 def init_reward_normalizer() -> RewardNormalizerState:
     return (
-        jnp.array(-300.0),  # Start with reasonable mean for our reward range
-        jnp.array(100.0),   # Start with reasonable variance
+        jnp.array(-300.0),  
+        jnp.array(100.0),   
         jnp.array(0),
         jnp.array(1e-4), 
-        jnp.array(200)      # Increased min_count to collect more data before normalizing
+        jnp.array(200)      
     )
 
 def update_reward_normalizer(state: RewardNormalizerState, rewards: jnp.ndarray) -> RewardNormalizerState:
@@ -163,16 +161,13 @@ def normalize_reward(state, rewards):
     mean, var, count, eps, min_count = state
     do_norm = count >= min_count
     
-    # DON'T normalize rewards initially - let the policy see the raw signal
-    if count < min_count:
-        # Use raw rewards scaled down for better gradients
-        return rewards / 150.0  # Scale -300 to -3.0 range
     
-    # After sufficient data, normalize but with much wider clipping
+    if count < min_count:
+        return rewards / 150.0  
+    
     normalized = (rewards - mean) / jnp.sqrt(var + eps + 1e-6)
     
-    # Much wider clipping range to preserve reward differences
-    return jnp.clip(normalized, -50.0, 50.0)  # Was -10.0, 10.0
+    return jnp.clip(normalized, -50.0, 50.0)  
 
 
 
@@ -186,7 +181,7 @@ def sample_trajectories(
         state, timestep = task_env.reset(key)
         initial_obs = flatten_state(state)
         
-        # Check for valid initial observation
+        
         if not jnp.all(jnp.isfinite(initial_obs)):
             print(f"Warning: Invalid initial observation detected")
             return _create_empty_trajectory()
@@ -209,13 +204,13 @@ def sample_trajectories(
             action_sample = action_dist.sample(seed=action_key_step)
             log_prob_sample = action_dist.log_prob(action_sample)
             
-            # Handle multi-dimensional log probs and check for validity
+            
             if log_prob_sample.ndim > 0:
                 log_prob_sample = jnp.sum(log_prob_sample)
                 
-            # Check for invalid log probabilities
+           
             if not jnp.isfinite(log_prob_sample):
-                log_prob_sample = jnp.array(-10.0)  # Default safe value
+                log_prob_sample = jnp.array(-10.0)  
             
             value_estimate = value_apply(value_params, current_norm_o).squeeze()
             if not jnp.isfinite(value_estimate):
@@ -223,17 +218,17 @@ def sample_trajectories(
                 
             action_flat_for_env = action_sample.reshape(-1)
             
-            # Environment step with safety checks
+           
             next_env_state, next_env_timestep = task_env.step(env_state, action_flat_for_env)
             raw_reward = next_env_timestep.reward
             
-            # Check reward validity
+            
             if not jnp.isfinite(raw_reward):
-                raw_reward = jnp.array(-0.1)  # Penalty for invalid state
+                raw_reward = jnp.array(-0.1)  
                 
             norm_reward_val = normalize_reward(reward_norm_state, raw_reward)
             
-            # Calculate violations safely
+            
             try:
                 sinr_vals = task_env._compute_sinr(next_env_state)
                 user_best_sinr = jnp.max(sinr_vals, axis=1)
@@ -245,11 +240,11 @@ def sample_trajectories(
             
             next_flat_obs = flatten_state(next_env_state)
             
-            # Check observation validity
+            
             if not jnp.all(jnp.isfinite(next_flat_obs)):
-                # Return early termination
+                
                 done_flag = jnp.array(True)
-                next_norm_o = current_norm_o  # Keep previous observation
+                next_norm_o = current_norm_o  
             else:
                 next_norm_o = normalize_obs(obs_norm_state, next_flat_obs)
                 done_flag = next_env_timestep.last()
@@ -263,7 +258,6 @@ def sample_trajectories(
             return new_carry, outputs_step
             
         except Exception as e:
-            # Return safe defaults on any error
             done_flag = jnp.array(True)
             safe_outputs = (
                 current_norm_o, 
@@ -283,7 +277,6 @@ def sample_trajectories(
         final_norm_obs_for_gae = final_carry[2]
         final_value_for_gae = value_apply(value_params, final_norm_obs_for_gae).squeeze()
         
-        # Validate outputs
         if not jnp.all(jnp.isfinite(observations_all)):
             print("Warning: Invalid observations in trajectory")
             return _create_empty_trajectory()
@@ -305,8 +298,8 @@ def sample_trajectories(
 def _create_empty_trajectory():
     """Helper function to create empty trajectory for error cases"""
     return {
-        'observations': jnp.array([]).reshape(0, 70),  # Adjust based on actual obs dim
-        'actions': jnp.array([]).reshape(0, 15),  # Adjust based on action dim
+        'observations': jnp.array([]).reshape(0, 70),  
+        'actions': jnp.array([]).reshape(0, 15),  
         'rewards': jnp.array([]),
         'raw_rewards': jnp.array([]),
         'values': jnp.array([]),
@@ -326,13 +319,13 @@ def sample_trajectories_simple(
 ) -> dict:
     """Simple non-JAX trajectory sampling for debugging"""
     
-    # Initialize
+    
     state, timestep = task_env.reset(key)
     initial_obs = flatten_state(state)
     initial_norm_obs = normalize_obs(obs_norm_state, initial_obs)
     _, hidden_state = policy_apply(policy_params, initial_norm_obs, None)
     
-    # Collect data with regular Python loop
+    
     observations = []
     actions = []
     rewards = []
@@ -362,12 +355,8 @@ def sample_trajectories_simple(
         
         # Environment step
         action_flat = action.reshape(-1)
-        #print(f"Step {step}: Action = {action_flat}, Action shape = {action_flat.shape}")  # Debug
-        
         next_state, next_timestep = task_env.step(current_state, action_flat)
         raw_reward = next_timestep.reward
-        
-        #print(f"Step {step}: Raw reward = {raw_reward}")  # Debug
         
         # Scale reward
         norm_reward = raw_reward / 100.0
@@ -516,9 +505,9 @@ def compute_ppo_loss(
             if entropy_t.ndim > 0:
                 entropy_t = jnp.mean(entropy_t)
 
-            # More conservative ratio calculation
+            
             log_ratio_t = current_log_prob_t - old_log_prob_t
-            log_ratio_t = jnp.clip(log_ratio_t, -5.0, 5.0)  # Tighter clipping
+            log_ratio_t = jnp.clip(log_ratio_t, -5.0, 5.0)  
             ratio_t = jnp.exp(log_ratio_t)
 
             # PPO clipped objective
@@ -526,11 +515,9 @@ def compute_ppo_loss(
             surr2_t = jnp.clip(ratio_t, 1.0 - clip_ratio, 1.0 + clip_ratio) * advantage_t
             policy_loss_term_t = -jnp.minimum(surr1_t, surr2_t)
             
-            # Simple value loss (no clipping)
             value_loss_term_t = jnp.square(return_t - value_t)
             entropy_bonus_term_t = -entropy_t
 
-            # Ensure all outputs are finite
             policy_loss_term_t = jnp.where(jnp.isfinite(policy_loss_term_t), policy_loss_term_t, 0.0)
             value_loss_term_t = jnp.where(jnp.isfinite(value_loss_term_t), value_loss_term_t, 0.0)
             entropy_bonus_term_t = jnp.where(jnp.isfinite(entropy_bonus_term_t), entropy_bonus_term_t, 0.0)
@@ -538,7 +525,6 @@ def compute_ppo_loss(
             return next_hidden_state_carry, (policy_loss_term_t, value_loss_term_t, entropy_bonus_term_t)
             
         except Exception as e:
-            # Return zero losses on error
             return hidden_state_carry, (jnp.array(0.0), jnp.array(0.0), jnp.array(0.0))
 
     scan_inputs_stacked = (obs_seq, actions_seq, old_log_probs_seq, advantages_seq, returns_seq)
@@ -578,7 +564,6 @@ def compute_ppo_loss(
     mean_value_loss = jnp.where(count_valid_steps > 0, mean_value_loss, 0.0)
     mean_entropy_bonus = jnp.where(count_valid_steps > 0, mean_entropy_bonus, 0.0)
 
-    # More conservative loss clipping
     mean_policy_loss = jnp.clip(mean_policy_loss, -10.0, 10.0)
     mean_value_loss = jnp.clip(mean_value_loss, 0.0, 10.0)
     mean_entropy_bonus = jnp.clip(mean_entropy_bonus, -2.0, 2.0)
@@ -595,7 +580,6 @@ def ppo_inner_adaptation(
     policy_params, value_params, policy_apply, value_apply, traj,
     inner_lr, inner_steps, clip_ratio=0.1
 ):
-    # Skip adaptation if trajectory is empty
     if traj['observations'].shape[0] == 0:
         return policy_params, value_params
         
@@ -615,8 +599,8 @@ def ppo_inner_adaptation(
             loss_val, grads_tuple_f = jax.value_and_grad(loss_fn_for_grad_f)((curr_policy_params_f, curr_value_params_f))
             policy_grads_f, value_grads_f = grads_tuple_f
             
-            # Conservative gradient clipping
-            max_grad_norm = 0.5  # Smaller clipping
+            
+            max_grad_norm = 0.5  
             
             policy_grad_norm = optax.global_norm(policy_grads_f)
             value_grad_norm = optax.global_norm(value_grads_f)
@@ -628,14 +612,13 @@ def ppo_inner_adaptation(
             value_grads_f = jax.tree_map(lambda g: g * value_clip_factor, value_grads_f)
             
             # Apply gradients with smaller learning rate
-            effective_lr = inner_lr * 0.5  # Even more conservative
+            effective_lr = inner_lr * 0.5  
             new_policy_params_f = jax.tree_map(lambda p, g: p - effective_lr * g, curr_policy_params_f, policy_grads_f)
             new_value_params_f = jax.tree_map(lambda p, g: p - effective_lr * g, curr_value_params_f, value_grads_f)
             
             return (new_policy_params_f, new_value_params_f)
             
         except Exception as e:
-            # Return unchanged parameters on error
             return (curr_policy_params_f, curr_value_params_f)
 
     try:
@@ -673,28 +656,23 @@ def compute_meta_objective(
 def sample_task(env: DynamicSpectrumEnv, key: chex.PRNGKey) -> DynamicSpectrumEnv: 
     keys = jax.random.split(key, 4)  # Reduced variations for stability
     
-    # Much more conservative task variations to ensure stability
-    # Interference variation (less aggressive)
     variation_interference = jax.random.uniform(keys[0], (), minval=0.8, maxval=1.2)
     new_max_interference = env.max_interference * variation_interference
 
-    # Fading coherence variation (smaller range)
     fading_variation = jax.random.uniform(keys[1], (), minval=0.9, maxval=1.1)
     new_fading_coherence = jnp.clip(env.fading_coherence * fading_variation, 0.5, 0.99)
     
-    # QoS requirement variation (smaller)
+    # QoS requirement variation 
     latency_variation = jax.random.uniform(keys[2], (), minval=0.9, maxval=1.1)
     new_max_latency = env.max_latency * latency_variation
     
-    # SINR requirement variation (smaller)
+    # SINR requirement variation 
     sinr_variation = jax.random.uniform(keys[3], (), minval=0.95, maxval=1.05)
     new_min_sinr = env.min_sinr * sinr_variation
     
-    # Keep power levels the same for stability
     new_max_power = env.max_power
     new_power_levels = env.power_levels
     
-    # Get additional attributes with defaults if they don't exist
     current_bandwidth_hz = getattr(env, 'bandwidth_hz', BANDWIDTH_HZ) 
     current_noise_figure_db = getattr(env, 'noise_figure_db', NOISE_FIGURE_DB) 
 
@@ -713,7 +691,6 @@ def sample_task(env: DynamicSpectrumEnv, key: chex.PRNGKey) -> DynamicSpectrumEn
             min_sinr=new_min_sinr
         )
         
-        # Set additional attributes to maintain consistency
         new_env.bandwidth_hz = current_bandwidth_hz
         new_env.noise_figure_db = current_noise_figure_db
         new_env.thermal_noise_dbm_hz = getattr(env, 'thermal_noise_dbm_hz', -174.0)
@@ -722,7 +699,6 @@ def sample_task(env: DynamicSpectrumEnv, key: chex.PRNGKey) -> DynamicSpectrumEn
         
     except Exception as e:
         print(f"Error creating task environment: {e}")
-        # Return original environment as fallback
         return env
 
 
@@ -756,14 +732,13 @@ def enhanced_logging(iteration, metrics, history):
     if iteration % 20 == 0 and iteration > 0:
         print(f"\n=== Training Summary (Iteration {iteration}) ===")
         
-        # Recent performance trends
+        
         recent_window = min(10, len(history['avg_post_rewards']))
         if recent_window > 1:
             recent_rewards = history['avg_post_rewards'][-recent_window:]
             trend = "↗️" if recent_rewards[-1] > recent_rewards[0] else "↘️"
             print(f"Recent reward trend: {trend} ({recent_rewards[0]:.3f} → {recent_rewards[-1]:.3f})")
         
-        # Current performance
         pre_r = metrics.get('eval_avg_pre_reward', 0.0)
         post_r = metrics.get('eval_avg_post_reward', 0.0)
         print(f"Current: pre={pre_r:.3f}, post={post_r:.3f}, gain={((post_r-pre_r)/abs(pre_r)*100 if pre_r != 0 else 0):.1f}%")
@@ -775,22 +750,22 @@ def train_recurrent_maml_ppo(
     num_tasks: int, inner_lr: float, inner_steps: int, meta_lr: float, num_iterations: int,
     obs_dim: int, key: jnp.ndarray, clip_ratio: float = 0.1, eval_interval: int = 10,
     num_eval_tasks: int = 5, wandb_project: str = "recurrent-maml-ppo", wandb_name: str = None,
-    use_wandb: bool = True, rollout_len: int = 20  # Reduced rollout length for stability
+    use_wandb: bool = True, rollout_len: int = 20  
 ) -> Tuple[Tuple[Any,Any], Dict[str, list]]:
 
     params = (policy_params, value_params)
     obs_norm_state = init_obs_normalizer(obs_dim)
     reward_norm_state = init_reward_normalizer()
 
-    # Much more conservative optimizer settings
+    
     lr_schedule = optax.exponential_decay(
-        init_value=meta_lr * 0.5,  # Start with smaller learning rate
+        init_value=meta_lr * 0.5,  
         transition_steps=max(1, num_iterations // 20), 
-        decay_rate=0.98  # Slower decay
+        decay_rate=0.98  
     )
     optimizer = optax.chain(
-        optax.clip_by_global_norm(0.5),  # Much tighter gradient clipping
-        optax.adam(lr_schedule, eps=1e-8)  # More stable Adam
+        optax.clip_by_global_norm(0.5),  
+        optax.adam(lr_schedule, eps=1e-8)  
     )
     opt_state = optimizer.init(params)
 
@@ -818,13 +793,11 @@ def train_recurrent_maml_ppo(
         return loss_val
     value_and_grad_fn_for_task = jax.value_and_grad(get_meta_loss_and_grads_for_task, argnums=0)
 
-    # Add debugging counters
     successful_iterations = 0
     consecutive_failures = 0
     
     # Training loop with enhanced debugging and stability
     for iteration in range(num_iterations):
-        # More frequent cache clearing for memory management
         if iteration > 0 and iteration % 10 == 0: 
             print(f"DEBUG: Clearing JAX JIT caches at iteration {iteration}")
             jax.clear_caches()
@@ -835,17 +808,15 @@ def train_recurrent_maml_ppo(
         total_meta_loss_this_batch = 0.0
         num_successful_tasks_in_batch = 0
         
-        # Debug info for this iteration
+        
         task_failures = []
 
-        # Process each task in the meta-batch with enhanced debugging
         for task_idx in range(num_tasks):
             try:
                 task_specific_key = task_keys_for_batch[task_idx]
                 key_task_sample, key_train_traj, key_test_traj = jax.random.split(task_specific_key, 3)
                 task_env_instance = sample_task(env, key_task_sample)
 
-                # Sample training trajectory with timeout protection
                 train_traj_raw = sample_trajectories_simple(
                     task_env_instance, params[0], params[1], policy_apply, value_apply, key_train_traj,
                     obs_norm_state, reward_norm_state, num_steps=rollout_len
@@ -869,7 +840,7 @@ def train_recurrent_maml_ppo(
                     task_failures.append(f"Task {task_idx}: NaN in returns")
                     continue
 
-                # Use current parameters for test sampling (no adaptation during meta-training)
+                # Use current parameters for test sampling 
                 adapted_policy_p_for_test_sampling, adapted_value_p_for_test_sampling = params[0], params[1]
 
                 # Sample test trajectory
@@ -903,7 +874,7 @@ def train_recurrent_maml_ppo(
                     
                 # Check gradient validity
                 grad_is_finite = True
-                for grad_tree in [task_meta_grads[0], task_meta_grads[1]]:  # policy and value grads
+                for grad_tree in [task_meta_grads[0], task_meta_grads[1]]:  
                     grad_leaves = jax.tree_leaves(grad_tree)
                     if not all(jnp.all(jnp.isfinite(leaf)) for leaf in grad_leaves):
                         grad_is_finite = False
@@ -913,7 +884,6 @@ def train_recurrent_maml_ppo(
                     task_failures.append(f"Task {task_idx}: Non-finite gradients")
                     continue
 
-                # Success! Accumulate results
                 total_meta_loss_this_batch += task_meta_loss_val
                 
                 if accumulated_meta_grads is None: 
@@ -941,14 +911,13 @@ def train_recurrent_maml_ppo(
                 continue
 
         # Enhanced debugging output
-        if task_failures and iteration % 5 == 0:  # Print failures every 5 iterations
+        if task_failures and iteration % 5 == 0:  
             print(f"Iteration {iteration} task failures:")
-            for failure in task_failures[:3]:  # Show first 3 failures
+            for failure in task_failures[:3]:  
                 print(f"  {failure}")
             if len(task_failures) > 3:
                 print(f"  ... and {len(task_failures) - 3} more")
 
-        # Update meta-parameters if we have successful tasks
         if num_successful_tasks_in_batch > 0:
             avg_meta_loss_batch = total_meta_loss_this_batch / num_successful_tasks_in_batch
             meta_losses_hist.append(float(avg_meta_loss_batch))
@@ -961,9 +930,8 @@ def train_recurrent_maml_ppo(
             
             # Apply gradients with additional safety checks
             try:
-                # Check gradient norm before applying
                 total_grad_norm = optax.global_norm(mean_meta_grads)
-                if jnp.isfinite(total_grad_norm) and total_grad_norm < 100.0:  # Reasonable gradient norm
+                if jnp.isfinite(total_grad_norm) and total_grad_norm < 100.0:  
                     updates, opt_state = optimizer.update(mean_meta_grads, opt_state, params)
                     params = optax.apply_updates(params, updates)
                     consecutive_failures = 0
@@ -981,12 +949,10 @@ def train_recurrent_maml_ppo(
             consecutive_failures += 1
             print(f"Warning: Iteration {iteration} had no successful training tasks.")
 
-        # Early stopping if too many consecutive failures
         if consecutive_failures > 50:
             print(f"Early stopping due to {consecutive_failures} consecutive failures")
             break
 
-        # Initialize log_payload_eval for this iteration
         log_payload_eval = {
             'meta_loss': meta_losses_hist[-1] if meta_losses_hist else 0.0,
             'successful_tasks_ratio': num_successful_tasks_in_batch / num_tasks if num_tasks > 0 else 0.0,
@@ -995,7 +961,7 @@ def train_recurrent_maml_ppo(
             'eval_avg_reward_improvement': 0.0
         }
 
-        # Evaluation loop (only if we have some successful training)
+        # Evaluation loop 
         if iteration % eval_interval == 0: 
             log_payload_eval = {
                 "iteration": iteration, 
@@ -1049,7 +1015,6 @@ def train_recurrent_maml_ppo(
                         current_eval_post_qoss.append(jnp.mean(post_adapt_traj_eval["qos_violations"]))
 
                 except Exception as e:
-                    # Silently continue with evaluation failures
                     continue
 
             # Aggregate evaluation metrics and update history
@@ -1069,7 +1034,7 @@ def train_recurrent_maml_ppo(
             if current_eval_pre_sinrs:
                 aps = jnp.mean(jnp.array(current_eval_pre_sinrs))
                 aops = jnp.mean(jnp.array(current_eval_post_sinrs)) if current_eval_post_sinrs else aps
-                assi = aps - aops  # Improvement = reduction in violations
+                assi = aps - aops  
                 eval_avg_pre_sinrs_hist.append(float(aps))
                 eval_avg_post_sinrs_hist.append(float(aops))
                 eval_avg_sinr_improvements_hist.append(float(assi))
@@ -1082,7 +1047,7 @@ def train_recurrent_maml_ppo(
             if current_eval_pre_qoss:
                 apq = jnp.mean(jnp.array(current_eval_pre_qoss))
                 apoq = jnp.mean(jnp.array(current_eval_post_qoss)) if current_eval_post_qoss else apq
-                asqi = apq - apoq  # Improvement = reduction in violations
+                asqi = apq - apoq  
                 eval_avg_pre_qoss_hist.append(float(apq))
                 eval_avg_post_qoss_hist.append(float(apoq))
                 eval_avg_qos_improvements_hist.append(float(asqi))
@@ -1103,7 +1068,6 @@ def train_recurrent_maml_ppo(
                   f"pre_r={pre_reward:6.3f} post_r={post_reward:6.3f} | "
                   f"gain={improvement_pct:+5.2f}%")
             
-            # Add training summary every 20 iterations
             if iteration > 0 and iteration % 20 == 0 and len(eval_avg_post_rewards_hist) >= 2:
                 recent_trend = "↗️" if eval_avg_post_rewards_hist[-1] > eval_avg_post_rewards_hist[-2] else "↘️"
                 print(f"\n=== Training Summary (Iteration {iteration}) ===")
@@ -1115,7 +1079,6 @@ def train_recurrent_maml_ppo(
                 wandb.log(log_payload_eval, step=iteration)
         
         else:
-            # FOR NON-EVALUATION ITERATIONS: Just log basic info without evaluation metrics
             basic_log_payload = {
                 "iteration": iteration,
                 "meta_loss": meta_losses_hist[-1] if meta_losses_hist and jnp.isfinite(meta_losses_hist[-1]) else float('nan'),
