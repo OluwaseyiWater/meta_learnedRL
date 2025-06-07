@@ -28,6 +28,7 @@ def main(cfg: DictConfig) -> None:
     policy_params = policy.init(init_key, sample_obs, None)
     value_params = value.init(init_key, sample_obs)
 
+    # COMPLETE AND CORRECT FUNCTION CALL:
     params, loss_history = train_recurrent_maml_ppo(
         env=env,
         policy_params=policy_params,
@@ -50,24 +51,20 @@ def main(cfg: DictConfig) -> None:
         rollout_len=cfg.recurrent_ml.get('rollout_len', 50) 
     )
 
-    # Save the trained parameters
+    # Save results
     output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
     model_dir = os.path.join(output_dir, "models_output") 
     os.makedirs(model_dir, exist_ok=True)
+    
     save_path = os.path.join(model_dir, "trained_params.pkl")
     save_model(save_path, params, None) 
-    print(f"Trained parameters saved to {save_path}")
+    print(f"✓ Trained parameters saved to {save_path}")
 
-    # Save the training history
     history_path = os.path.join(model_dir, "history.pkl")
     with open(history_path, 'wb') as f:
         pickle.dump(loss_history, f)
-    print(f"Training history saved to {history_path}")
+    print(f"✓ Training history saved to {history_path}")
 
-    # Print environment details
-    print(f"Number of base stations: {env.num_bs}")
-    print(f"Number of bands: {env.num_bands}")
-    print(f"Number of power levels: {env.num_power_levels}")
     print("Training completed.")
 
 if __name__ == "__main__":
