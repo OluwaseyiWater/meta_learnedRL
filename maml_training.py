@@ -1,4 +1,3 @@
-%%writefile maml_training.py
 from mLN.environment import DynamicSpectrumEnv 
 from models.maml import train_maml 
 from utils import save_model
