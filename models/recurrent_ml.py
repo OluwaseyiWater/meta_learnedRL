@@ -14,6 +14,27 @@ import tensorflow_probability.substrates.jax as tfp
 
 tfd = tfp.distributions
 
+# Constants
+NUM_BS = 3  
+NUM_BANDS = 4  
+NUM_USERS = 5  
+NUM_POWER_LEVELS = 5  
+META_LR = 1e-3
+INNER_LR = 0.1
+META_BATCH_SIZE = 4
+NUM_INNER_STEPS = 1
+NUM_META_ITERS = 1000
+ROLLOUT_LENGTH = 50
+DISCOUNT_FACTOR = 0.99  
+NUM_META_BATCHES = 10
+
+# ==============================================================================
+# CONSTANTS
+# ==============================================================================
+ROLLOUT_LENGTH = 50 
+BANDWIDTH_HZ = 10e6
+NOISE_FIGURE_DB = 7.0
+
 def compute_gae(traj: Dict, gamma: float, lambda_: float) -> Tuple[jnp.ndarray, jnp.ndarray]:
     last_value = traj["final_value"]
     reversed_traj_parts = jax.tree.map(lambda x: x[::-1], (traj["rewards"], traj["dones"], traj["values"]))

@@ -22,9 +22,27 @@ POWER_LEVELS = jnp.linspace(0, MAX_POWER, NUM_POWER_LEVELS)
 FADING_COHERENCE = 0.9
 MAX_STEPS = 100
 MIN_SINR = 5.0
-NOISE_FIGURE_DB = 9.0
+
+# Constants
+NUM_BS = 3  
+NUM_BANDS = 4  
+NUM_USERS = 5  
+NUM_POWER_LEVELS = 5  
+META_LR = 1e-3
+INNER_LR = 0.1
+META_BATCH_SIZE = 4
+NUM_INNER_STEPS = 1
+NUM_META_ITERS = 1000
+ROLLOUT_LENGTH = 50
+DISCOUNT_FACTOR = 0.99  
+NUM_META_BATCHES = 10
+
+# ==============================================================================
+# CONSTANTS
+# ==============================================================================
+ROLLOUT_LENGTH = 50 
 BANDWIDTH_HZ = 10e6
-THERMAL_NOISE_DBM_HZ = -174
+NOISE_FIGURE_DB = 7.0
 
 @chex.dataclass
 class SpectrumState:
