@@ -2,12 +2,18 @@
 meta_lr: 3e-5
 inner_lr: 1e-4
 inner_steps: 5
-num_tasks_per_batch: 16
-num_meta_iterations: 500
-clip_ratio: 0.2
-wandb_project: "recurrent-maml-ppo"
-wandb_name: null
-use_wandb: true
+meta_batch_size: 16
+num_meta_iters: 500
+rollout_length: 128
+vf_coef: 0.5
+ent_coef: 0.01
+clip_epsilon: 0.2
+max_grad_norm: 1.0
+use_wandb: True
+gamma: 0.99
+lambda_: 0.95
+wandb_project: "maml-recurrent-ml"
+wandb_name: "simple-recurrent-maml-ppo"
 
 # Evaluation & Logging
 log_interval: 10
@@ -18,4 +24,3 @@ num_eval_tasks: 10
 lstm_hidden_dim: 64
 mlp_hidden_dim: 128
 critic_hidden_dim: 128
-meta_batch_size: 16
