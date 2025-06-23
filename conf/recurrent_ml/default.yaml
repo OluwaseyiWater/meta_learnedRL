@@ -18,4 +18,3 @@ num_eval_tasks: 10
 lstm_hidden_dim: 64
 mlp_hidden_dim: 128
 critic_hidden_dim: 128
-

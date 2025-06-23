@@ -16,7 +16,7 @@ def main(cfg: Config):
     c = cfg.recurrent_ml
 
     config = {
-        "seed": c.seed,
+        "seed": cfg.seed,
         "meta_lr": c.meta_lr,
         "inner_lr": c.inner_lr,
         "inner_steps": c.inner_steps,
