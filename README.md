@@ -16,3 +16,9 @@ The project is split into four main components:
 
 * Installation
 	+ `pip install --upgrade -r requirements.txt`
+
+* Run the code
+	+ chmod +x scripts/*
+	+ ./scripts/run_maml.sh
+	+ ./scripts/run_recurrent_attn.sh
+	+ ./scripts/run_recurrent_ml.sh
