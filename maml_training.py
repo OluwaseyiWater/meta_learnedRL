@@ -12,7 +12,38 @@ import pickle
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
+    # Use Hydra's instantiate to create the environment
     env = hydra.utils.instantiate(cfg.env)
+    
+    # Ensure compatibility by setting additional attributes if needed
+    if not hasattr(env, 'bandwidth_hz'):
+        env.bandwidth_hz = getattr(env, 'bandwidth_hz', 10e6)
+    if not hasattr(env, 'noise_figure_db'):
+        env.noise_figure_db = getattr(env, 'noise_figure_db', 7.0)
+    if not hasattr(env, 'thermal_noise_dbm_hz'):
+        env.thermal_noise_dbm_hz = getattr(env, 'thermal_noise_dbm_hz', -174.0)
+    
+    # For compatibility with different attribute names in the code
+    if hasattr(env, 'max_power_dbm'):
+        env.max_power = env.max_power_dbm
+    elif hasattr(env, 'max_power'):
+        env.max_power_dbm = env.max_power
+        
+    if hasattr(env, 'power_levels_dbm'):
+        env.power_levels = env.power_levels_dbm
+    elif hasattr(env, 'power_levels'):
+        env.power_levels_dbm = env.power_levels
+        
+    if hasattr(env, 'max_external_interference_mW'):
+        env.max_interference = env.max_external_interference_mW
+    elif hasattr(env, 'max_interference'):
+        env.max_external_interference_mW = env.max_interference
+        
+    if hasattr(env, 'min_sinr_db'):
+        env.min_sinr = env.min_sinr_db
+    elif hasattr(env, 'min_sinr'):
+        env.min_sinr_db = env.min_sinr
+    
     num_bs = env.num_bs
     num_bands = env.num_bands
     num_power_levels = env.num_power_levels
@@ -42,7 +73,7 @@ def main(cfg: DictConfig) -> None:
     })
 
     output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
-    model_dir = os.path.join(output_dir, "models")
+    model_dir = os.path.join(output_dir, "models") 
     os.makedirs(model_dir, exist_ok=True)
 
     save_model(os.path.join(model_dir, "A2C_trained_params.pkl"), trained_params, None)

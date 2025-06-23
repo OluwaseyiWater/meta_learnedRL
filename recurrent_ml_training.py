@@ -1,7 +1,7 @@
 import jax
 from models.recurrent_ml import make_networks, train_recurrent_maml_ppo
-from mLN.environment import DynamicSpectrumEnv
-from utils import flatten_state, save_model
+from mLN.environment import DynamicSpectrumEnv 
+from utils import flatten_state, save_model 
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import os
@@ -20,8 +20,8 @@ import pickle
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
-    key = jax.random.PRNGKey(cfg.seed)
-    key, init_key = jax.random.split(key)
+    key = jax.random.PRNGKey(cfg.seed if hasattr(cfg, 'seed') else 42) 
+    key, init_key, train_key = jax.random.split(key, 3) 
 
     env = hydra.utils.instantiate(cfg.env)
     num_bs = env.num_bs
@@ -32,7 +32,9 @@ def main(cfg: DictConfig) -> None:
     sample_obs = flatten_state(state)
     obs_dim = sample_obs.shape[0]
 
+
     policy, value = make_networks(num_bs, num_bands, num_power_levels)
+    policy_params = policy.init(init_key, sample_obs, None)
     policy_params = policy.init(init_key, sample_obs, None)
     value_params = value.init(init_key, sample_obs)
 
@@ -58,7 +60,7 @@ def main(cfg: DictConfig) -> None:
     trained_params, history = train_recurrent_maml_ppo(conf_train)
 
     output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
-    model_dir = os.path.join(output_dir, "models_output")
+    model_dir = os.path.join(output_dir, "models_output") 
     os.makedirs(model_dir, exist_ok=True)
 
     save_model(os.path.join(model_dir, "ppo_trained_params.pkl"), trained_params, None)
@@ -74,3 +76,4 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     main()
+

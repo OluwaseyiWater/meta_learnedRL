@@ -1,11 +1,11 @@
 from functools import partial
-from typing import Any, Callable, Tuple, Dict
+from typing import Any, Callable, Tuple, Dict, List
 import haiku as hk
 import jax
 import jax.numpy as jnp
 import optax
 import tensorflow_probability.substrates.jax as tfp
-from utils import flatten_state
+from utils import flatten_state 
 import wandb
 from utils import SpectrumState
 from mLN.environment import DynamicSpectrumEnv
@@ -25,6 +25,12 @@ ROLLOUT_LENGTH = 50
 DISCOUNT_FACTOR = 0.99  
 NUM_META_BATCHES = 10
 
+# ==============================================================================
+# CONSTANTS
+# ==============================================================================
+ROLLOUT_LENGTH = 50 
+BANDWIDTH_HZ = 10e6
+NOISE_FIGURE_DB = 7.0
 
 tfd = tfp.distributions
 
@@ -39,13 +45,16 @@ def flatten_state(state: SpectrumState) -> jnp.ndarray:
     ])
 
 def residual_block(x, hidden_dim):
+    """Residual block for deeper networks"""
     h = hk.Linear(hidden_dim)(x)
     h = jax.nn.relu(h)
     h = hk.Linear(hidden_dim)(h)
     return jax.nn.relu(x + h)
 
+
 class MLPNetwork(hk.Module):
-    def __init__(self, num_bs, num_bands, num_power_levels, hidden_dim=64, num_blocks=3):
+    """Policy network with residual blocks"""
+    def __init__(self, num_bs, num_bands, num_power_levels, hidden_dim=64, num_blocks=2):
         super().__init__()
         self.output_size = num_bs * num_bands * num_power_levels
         self.reshape_dims = (-1, num_bs * num_bands, num_power_levels)
@@ -62,8 +71,10 @@ class MLPNetwork(hk.Module):
         logits = jnp.clip(logits, -20.0, 20.0)
         return logits.reshape(*self.reshape_dims)
 
+
 class ValueNetwork(hk.Module):
-    def __init__(self, hidden_dim=64, num_blocks=3):
+    """Value network with residual blocks"""
+    def __init__(self, hidden_dim=64, num_blocks=2):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_blocks = num_blocks
@@ -75,6 +86,7 @@ class ValueNetwork(hk.Module):
         for _ in range(self.num_blocks):
             x = residual_block(x, self.hidden_dim)
         return hk.Linear(1)(x).squeeze(axis=-1)
+
 
 def make_networks(num_bs, num_bands, num_power_levels):
     def policy_fn_builder(obs):

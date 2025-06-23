@@ -47,6 +47,10 @@ class DynamicSpectrumEnv(Environment):
         self.fading_coherence = fading_coherence
         self.max_interference = max_interference
         self.min_sinr = min_sinr
+        # Additional parameters for proper wireless modeling
+        self.noise_figure_db = NOISE_FIGURE_DB
+        self.bandwidth_hz = BANDWIDTH_HZ
+        self.thermal_noise_dbm_hz = THERMAL_NOISE_DBM_HZ
 
     def action_spec(self) -> specs.MultiDiscreteArray:
         return specs.MultiDiscreteArray(
@@ -67,14 +71,34 @@ class DynamicSpectrumEnv(Environment):
         )
 
     def reset(self, key: chex.PRNGKey) -> Tuple[SpectrumState, TimeStep]:
-        key, subkey1, subkey2, subkey3 = jax.random.split(key, 4)
+        key, subkey1, subkey2, subkey3, subkey4 = jax.random.split(key, 5)
+        
+        
         scenario = jax.random.randint(subkey1, (), 0, 3)
+        # Distance-dependent path loss (in dB)
+        distances = jax.random.uniform(subkey4, (self.num_users, self.num_bs), minval=0.1, maxval=2.0)  # km
+        
+        # Path loss models for different scenarios (Urban, Suburban, Rural)
+        path_loss_urban = 128.1 + 37.6 * jnp.log10(distances)
+        path_loss_suburban = 98.5 + 23.1 * jnp.log10(distances) 
+        path_loss_rural = 105.3 + 34.2 * jnp.log10(distances)
+        
         path_loss = jnp.select(
             [scenario == 0, scenario == 1, scenario == 2],
-            [128.1 + 37.6 * jnp.log10(0.5), 98.5 + 23.1 * jnp.log10(2.0), 105.3 + 34.2 * jnp.log10(1.0)]
+            [path_loss_urban, path_loss_suburban, path_loss_rural]
         )
-        channel_gains = path_loss + jax.random.normal(subkey2, (self.num_users, self.num_bs))
-        interference_map = jax.random.uniform(subkey3, (self.num_bs, self.num_bands), minval=0.0, maxval=self.max_interference * 0.5)
+        
+        #  shadow fading (log-normal)
+        shadow_fading = jax.random.normal(subkey2, (self.num_users, self.num_bs)) * 8.0  # 8 dB std
+        
+        # Total channel gains
+        channel_gains = -(path_loss + shadow_fading)
+        
+        # External interference 
+        interference_mw = jax.random.uniform(subkey3, (self.num_bs, self.num_bands), 
+                                           minval=0.001, maxval=self.max_interference * 0.5)
+        interference_map = 10.0 * jnp.log10(interference_mw + 1e-12)  
+        
         state = SpectrumState(
             channel_gains=channel_gains,
             interference_map=interference_map,
@@ -178,13 +202,16 @@ class DynamicSpectrumEnv(Environment):
         )
 
     def render(self, state: SpectrumState) -> None:
+        sinr_db = self._compute_sinr(state)
         print(f"Step {int(state.time)}")
         print("Spectrum Allocation:")
         print(state.spectrum_alloc)
-        print("Transmit Power:")
+        print("Transmit Power (dBm):")
         print(state.tx_power)
         print(f"Latency violations: {jnp.sum(state.qos_metrics[:, 0] > self.max_latency)}")
-        print(f"SINR violations: {jnp.sum(self._compute_sinr(state) < self.min_sinr)}")
+        print(f"SINR violations: {jnp.sum(jnp.max(sinr_db, axis=1) < self.min_sinr)}")
+        print(f"Average user SINR: {jnp.mean(jnp.max(sinr_db, axis=1)):.2f} dB")
+        print(f"Average throughput: {jnp.mean(state.qos_metrics[:, 1]):.3f}")
         
 # Test and Usage
 if __name__ == "__main__":
@@ -202,8 +229,13 @@ if __name__ == "__main__":
     action_mask = env._mask_unsafe_actions(new_state)
     print(f"Action mask for power level 3 on BS 0, band 0: {action_mask[0, 0, 3]}")
     
+    # Test SINR calculation
+    sinr_values = env._compute_sinr(new_state)
+    print(f"SINR shape: {sinr_values.shape}")
+    print(f"Sample SINR values: {sinr_values[:3, :3]}")
+    
     def train(num_episodes=100):
-        params = {}  # Placeholder: in practice, use Haiku/Flax for policy network parameters.
+        params = {}  
         opt = optax.adam(1e-3)
         opt_state = opt.init(params)
         
@@ -219,5 +251,4 @@ if __name__ == "__main__":
                 
             print(f"Episode {episode} completed at step {int(state.time)}")
     
-    # Run a short training example
     train(num_episodes=3)
