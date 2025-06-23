@@ -11,7 +11,7 @@ from hydra.core.hydra_config import HydraConfig
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
     print("Starting Recurrent MAML-PPO [Optimized Version]")
-    print(OmegaConf.to_yaml(cfg.recurrent_attn))
+    print(OmegaConf.to_yaml(cfg.attention_recurrent_ml))
 
     config = {
         "seed": cfg.seed,

@@ -9,7 +9,5 @@ vf_coef: 0.5
 ent_coef: 0.01
 max_grad_norm: 0.5
 log_interval: 10
-use_wandb: true
-gamma: 0.99
 wandb_project: "maml-rl"
 wandb_name: "maml-rl-run"
