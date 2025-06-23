@@ -9,7 +9,6 @@ from typing import Optional, Tuple, Dict
 import numpy as np
 import optax
 
-
 # Environment Constants
 MAX_INTERFERENCE = 25.0
 MAX_POWER = 23.0
@@ -22,27 +21,6 @@ POWER_LEVELS = jnp.linspace(0, MAX_POWER, NUM_POWER_LEVELS)
 FADING_COHERENCE = 0.9
 MAX_STEPS = 100
 MIN_SINR = 5.0
-
-# Constants
-NUM_BS = 3  
-NUM_BANDS = 4  
-NUM_USERS = 5  
-NUM_POWER_LEVELS = 5  
-META_LR = 1e-3
-INNER_LR = 0.1
-META_BATCH_SIZE = 4
-NUM_INNER_STEPS = 1
-NUM_META_ITERS = 1000
-ROLLOUT_LENGTH = 50
-DISCOUNT_FACTOR = 0.99  
-NUM_META_BATCHES = 10
-
-# ==============================================================================
-# CONSTANTS
-# ==============================================================================
-ROLLOUT_LENGTH = 50 
-BANDWIDTH_HZ = 10e6
-NOISE_FIGURE_DB = 7.0
 
 @chex.dataclass
 class SpectrumState:
@@ -68,10 +46,6 @@ class DynamicSpectrumEnv(Environment):
         self.fading_coherence = fading_coherence
         self.max_interference = max_interference
         self.min_sinr = min_sinr
-        # Additional parameters for proper wireless modeling
-        self.noise_figure_db = NOISE_FIGURE_DB
-        self.bandwidth_hz = BANDWIDTH_HZ
-        self.thermal_noise_dbm_hz = THERMAL_NOISE_DBM_HZ
 
     def action_spec(self) -> specs.MultiDiscreteArray:
         return specs.MultiDiscreteArray(
@@ -92,34 +66,14 @@ class DynamicSpectrumEnv(Environment):
         )
 
     def reset(self, key: chex.PRNGKey) -> Tuple[SpectrumState, TimeStep]:
-        key, subkey1, subkey2, subkey3, subkey4 = jax.random.split(key, 5)
-        
-        
+        key, subkey1, subkey2, subkey3 = jax.random.split(key, 4)
         scenario = jax.random.randint(subkey1, (), 0, 3)
-        # Distance-dependent path loss (in dB)
-        distances = jax.random.uniform(subkey4, (self.num_users, self.num_bs), minval=0.1, maxval=2.0)  # km
-        
-        # Path loss models for different scenarios (Urban, Suburban, Rural)
-        path_loss_urban = 128.1 + 37.6 * jnp.log10(distances)
-        path_loss_suburban = 98.5 + 23.1 * jnp.log10(distances) 
-        path_loss_rural = 105.3 + 34.2 * jnp.log10(distances)
-        
         path_loss = jnp.select(
             [scenario == 0, scenario == 1, scenario == 2],
-            [path_loss_urban, path_loss_suburban, path_loss_rural]
+            [128.1 + 37.6 * jnp.log10(0.5), 98.5 + 23.1 * jnp.log10(2.0), 105.3 + 34.2 * jnp.log10(1.0)]
         )
-        
-        #  shadow fading (log-normal)
-        shadow_fading = jax.random.normal(subkey2, (self.num_users, self.num_bs)) * 8.0  # 8 dB std
-        
-        # Total channel gains
-        channel_gains = -(path_loss + shadow_fading)
-        
-        # External interference 
-        interference_mw = jax.random.uniform(subkey3, (self.num_bs, self.num_bands), 
-                                           minval=0.001, maxval=self.max_interference * 0.5)
-        interference_map = 10.0 * jnp.log10(interference_mw + 1e-12)  
-        
+        channel_gains = path_loss + jax.random.normal(subkey2, (self.num_users, self.num_bs))
+        interference_map = jax.random.uniform(subkey3, (self.num_bs, self.num_bands), minval=0.0, maxval=self.max_interference * 0.5)
         state = SpectrumState(
             channel_gains=channel_gains,
             interference_map=interference_map,
