@@ -11,3 +11,4 @@ max_grad_norm: 0.5
 log_interval: 10
 wandb_project: "maml-rl"
 wandb_name: "maml-rl-run"
+use_wandb: True
