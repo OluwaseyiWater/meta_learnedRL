@@ -8,7 +8,7 @@ from functools import partial
 from typing import Any, Callable, Tuple, Dict, Optional, Sequence
 from collections import namedtuple
 from mLN.environment import DynamicSpectrumEnv
-from utils import flatten_state
+from utils import flatten_state, SpectrumState
 import tensorflow_probability.substrates.jax as tfp
 
 
