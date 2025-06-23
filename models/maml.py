@@ -45,16 +45,13 @@ def flatten_state(state: SpectrumState) -> jnp.ndarray:
     ])
 
 def residual_block(x, hidden_dim):
-    """Residual block for deeper networks"""
     h = hk.Linear(hidden_dim)(x)
     h = jax.nn.relu(h)
     h = hk.Linear(hidden_dim)(h)
     return jax.nn.relu(x + h)
 
-
 class MLPNetwork(hk.Module):
-    """Policy network with residual blocks"""
-    def __init__(self, num_bs, num_bands, num_power_levels, hidden_dim=64, num_blocks=2):
+    def __init__(self, num_bs, num_bands, num_power_levels, hidden_dim=64, num_blocks=3):
         super().__init__()
         self.output_size = num_bs * num_bands * num_power_levels
         self.reshape_dims = (-1, num_bs * num_bands, num_power_levels)
@@ -71,10 +68,8 @@ class MLPNetwork(hk.Module):
         logits = jnp.clip(logits, -20.0, 20.0)
         return logits.reshape(*self.reshape_dims)
 
-
 class ValueNetwork(hk.Module):
-    """Value network with residual blocks"""
-    def __init__(self, hidden_dim=64, num_blocks=2):
+    def __init__(self, hidden_dim=64, num_blocks=3):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_blocks = num_blocks
@@ -86,7 +81,6 @@ class ValueNetwork(hk.Module):
         for _ in range(self.num_blocks):
             x = residual_block(x, self.hidden_dim)
         return hk.Linear(1)(x).squeeze(axis=-1)
-
 
 def make_networks(num_bs, num_bands, num_power_levels):
     def policy_fn_builder(obs):
@@ -316,5 +310,27 @@ def train_maml(config: Dict):
     if config["use_wandb"]:
         wandb.finish()
 
-    return params, metrics
+    return params
    
+   
+if __name__ == '__main__':
+    config = {
+        "seed": 42,
+        "meta_lr": 3e-4,
+        "inner_policy_lr": 1e-3,
+        "inner_value_lr": 1e-3,
+        "inner_steps": 5,
+        "meta_batch_size": 16,
+        "num_meta_iters": 2000,
+        "rollout_length": 128,
+        "vf_coef": 0.5,
+        "ent_coef": 0.01,
+        "max_grad_norm": 0.5,
+        "log_interval": 10,
+        "use_wandb": False,
+        "wandb_project": "maml-spectrum-access",
+        "wandb_name": "maml-v12-stable"
+    }
+    print("Starting MAML training...")
+    trained_params = train_maml(config)
+    print("Training finished.")

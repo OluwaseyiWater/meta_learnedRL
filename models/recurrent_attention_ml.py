@@ -13,7 +13,6 @@ from utils import flatten_state, SpectrumState
 import tensorflow_probability.substrates.jax as tfp
 tfd = tfp.distributions
 
-
 def compute_gae(traj: Dict, gamma: float, lambda_: float) -> Tuple[jnp.ndarray, jnp.ndarray]:
     last_value = traj["final_value"]
     reversed_traj_parts = jax.tree.map(lambda x: x[::-1], (traj["rewards"], traj["dones"], traj["values"]))
@@ -354,7 +353,6 @@ def train_recurrent_maml_ppo(config: Dict) -> Tuple[Any, Dict]:
         wandb.finish()
     
     return params, all_metrics
-
 
 if __name__ == '__main__':
     config = {
