@@ -15,7 +15,7 @@ def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg.maml))
 
     config = {
-        "seed": cfg.maml.seed,
+        "seed": cfg.seed,
         "meta_lr": cfg.maml.meta_lr,
         "inner_policy_lr": cfg.maml.inner_policy_lr,
         "inner_value_lr": cfg.maml.inner_value_lr,
