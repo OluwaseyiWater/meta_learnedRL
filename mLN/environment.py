@@ -7,41 +7,41 @@ from jumanji.env import Environment
 from jumanji.types import TimeStep, restart, termination, transition, truncation
 from typing import Optional, Tuple, Dict
 import numpy as np
-import optax 
+import optax
 
-# Constants and hyperparameters
-MAX_INTERFERENCE = 25.0  
-MAX_POWER = 23.0  
-MAX_LATENCY = 50.0  
+
+# Environment Constants
+MAX_INTERFERENCE = 25.0
+MAX_POWER = 23.0
+MAX_LATENCY = 50.0
 NUM_BS = 3
 NUM_USERS = 10
 NUM_BANDS = 5
-NUM_POWER_LEVELS = 4 
-POWER_LEVELS = jnp.linspace(0, MAX_POWER, NUM_POWER_LEVELS) 
-FADING_COHERENCE = 0.9  
-MAX_STEPS = 100 
-MIN_SINR = 5.0 
+NUM_POWER_LEVELS = 4
+POWER_LEVELS = jnp.linspace(0, MAX_POWER, NUM_POWER_LEVELS)
+FADING_COHERENCE = 0.9
+MAX_STEPS = 100
+MIN_SINR = 5.0
 
 @chex.dataclass
 class SpectrumState:
-    channel_gains: chex.Array      # Shape: (num_bs, NUM_USERS) or (NUM_USERS, num_bs)
-    interference_map: chex.Array   # Now per BS and band: shape (num_bs, num_bands)
-    qos_metrics: chex.Array        # Shape: (NUM_USERS, 2) [latency, throughput]
-    spectrum_alloc: chex.Array     # Shape: (num_bs, num_bands), discrete allocation indices
-    tx_power: chex.Array           # Shape: (num_bs, num_bands), current transmit power (dBm)
-    time: chex.Array               # Scalar step counter
-    key: chex.PRNGKey              # JAX PRNG key for randomness
+    channel_gains: chex.Array
+    interference_map: chex.Array
+    user_latency: chex.Array
+    spectrum_alloc: chex.Array
+    tx_power: chex.Array
+    time: chex.Array
+    key: Optional[chex.PRNGKey] = None
 
 class DynamicSpectrumEnv(Environment):
     def __init__(self, num_bs=NUM_BS, num_users=NUM_USERS, num_bands=NUM_BANDS, max_steps=MAX_STEPS,
-                 max_latency=MAX_LATENCY, max_power=MAX_POWER, num_power_levels=NUM_POWER_LEVELS, power_levels=POWER_LEVELS,
+                 max_latency=MAX_LATENCY, num_power_levels=NUM_POWER_LEVELS, power_levels=POWER_LEVELS,
                  fading_coherence=FADING_COHERENCE, max_interference=MAX_INTERFERENCE, min_sinr=MIN_SINR):
         self.num_bs = num_bs
         self.num_users = num_users
         self.num_bands = num_bands
         self.max_steps = max_steps
         self.max_latency = max_latency
-        self.max_power = max_power
         self.num_power_levels = num_power_levels
         self.power_levels = power_levels
         self.fading_coherence = fading_coherence
@@ -60,7 +60,7 @@ class DynamicSpectrumEnv(Environment):
             "Observation",
             channel_gains=specs.Array((self.num_users, self.num_bs), jnp.float32),
             interference_map=specs.Array((self.num_bs, self.num_bands), jnp.float32),
-            qos_metrics=specs.Array((self.num_users, 2), jnp.float32),
+            user_latency=specs.Array((self.num_users,), jnp.float32),
             spectrum_alloc=specs.Array((self.num_bs, self.num_bands), jnp.int32),
             tx_power=specs.Array((self.num_bs, self.num_bands), jnp.float32),
             time=specs.Array((), jnp.int32),
@@ -78,7 +78,7 @@ class DynamicSpectrumEnv(Environment):
         state = SpectrumState(
             channel_gains=channel_gains,
             interference_map=interference_map,
-            qos_metrics=jnp.zeros((self.num_users, 2), dtype=jnp.float32),
+            user_latency=jnp.zeros(self.num_users, dtype=jnp.float32),
             spectrum_alloc=jnp.zeros((self.num_bs, self.num_bands), dtype=jnp.int32),
             tx_power=jnp.zeros((self.num_bs, self.num_bands), dtype=jnp.float32),
             time=jnp.array(0, dtype=jnp.int32),
@@ -87,107 +87,95 @@ class DynamicSpectrumEnv(Environment):
         return state, restart(state)
 
     def _mask_unsafe_actions(self, state: SpectrumState) -> chex.Array:
-        interference_mask = state.interference_map[:, :, None] < self.max_interference
-        return interference_mask
+        return state.interference_map < self.max_interference
 
     def _compute_sinr(self, state: SpectrumState) -> jnp.ndarray:
         avg_channel_gain = jnp.mean(state.channel_gains, axis=0)[:, None]
         signal = state.tx_power - jnp.tile(avg_channel_gain, (1, self.num_bands))
-        interference_db = 10 * jnp.log10(state.interference_map + 1e-6)
-        sinr = signal - interference_db
-        return sinr
+        interference_db = 10 * jnp.log10(state.interference_map + 1e-9)
+        return signal - interference_db
 
-    def _calculate_reward(self, state: SpectrumState, action: jnp.ndarray, previous_tx_power: jnp.ndarray) -> float:
-        POWER_COST_COEFF = 0.1
-        SWITCHING_COST_COEFF = 1.0
-        UTILIZATION_BONUS_COEFF = 2.0
-        VIOLATION_PENALTY_COEFF = 10.0
-        FAIRNESS_COEFF = 0.5
-        # Calculate reward components
-        throughput = jnp.sum(state.qos_metrics[:, 1])
-        x = state.qos_metrics[:,1]
-        fairness = (jnp.sum(x)**2) / (x.shape[0] * (jnp.sum(x**2) + 1e-6))
-        sinr = self._compute_sinr(state)
-        sinr_violations = jnp.sum(sinr < self.min_sinr)
-        latency_violations = jnp.sum(state.qos_metrics[:, 0] > self.max_latency)
+    def _calculate_reward(self, state: SpectrumState, previous_tx_power: jnp.ndarray) -> float:
+        THROUGHPUT_COEFF, FAIRNESS_COEFF, POWER_COST_COEFF, SWITCHING_COST_COEFF, VIOLATION_PENALTY_COEFF = 5.0, 0.5, 0.1, 1.0, 10.0
+        sinr_db = self._compute_sinr(state)
+        sinr_linear = 10**(sinr_db / 10.0)
+        is_active = state.tx_power > 0
+        throughput_per_band = jnp.log2(1 + sinr_linear) * is_active
+        total_throughput_reward = THROUGHPUT_COEFF * jnp.sum(throughput_per_band)
+        sum_of_throughputs = jnp.sum(throughput_per_band)
+        sum_of_squares = jnp.sum(throughput_per_band**2)
+        num_active_bands = jnp.sum(is_active)
+        fairness_denominator = num_active_bands * sum_of_squares + 1e-9
+        fairness_reward = FAIRNESS_COEFF * (sum_of_throughputs**2) / fairness_denominator
+        sinr_violations = jnp.sum(jnp.where(is_active, sinr_db < self.min_sinr, 0.0))
+        latency_violations = jnp.sum(state.user_latency > self.max_latency)
         violation_penalty = VIOLATION_PENALTY_COEFF * (latency_violations + sinr_violations)
-        new_tx_power = self.power_levels[action]
-        power_cost = POWER_COST_COEFF * jnp.sum(new_tx_power)
-        switching_cost = SWITCHING_COST_COEFF * jnp.sum(jnp.abs(previous_tx_power - new_tx_power))
-        utilization_bonus = UTILIZATION_BONUS_COEFF * jnp.sum(action > 0)
-        total_reward = throughput + FAIRNESS_COEFF * fairness + utilization_bonus - violation_penalty - power_cost - switching_cost
-        return total_reward
+        power_cost = POWER_COST_COEFF * jnp.sum(state.tx_power)
+        switching_cost = SWITCHING_COST_COEFF * jnp.sum(jnp.abs(previous_tx_power - state.tx_power))
+        return total_throughput_reward + fairness_reward - violation_penalty - power_cost - switching_cost
 
-    def _adaptive_penalty(self, state: SpectrumState) -> jnp.ndarray:
-        penalty = 0.1 * jnp.sum(state.interference_map > (0.8 * self.max_interference))
-        return penalty
+    def _compute_metrics(self, state: SpectrumState) -> Dict[str, chex.Array]:
+        """Computes a dictionary of performance metrics from a given state."""
+        sinr_db = self._compute_sinr(state)
+        sinr_linear = 10**(sinr_db / 10.0)
+        is_active = state.tx_power > 0
+
+        throughput_per_band = jnp.log2(1 + sinr_linear) * is_active
+        total_throughput = jnp.sum(throughput_per_band)
+
+        sum_of_throughputs = jnp.sum(throughput_per_band)
+        sum_of_squares = jnp.sum(throughput_per_band**2)
+        num_active_bands = jnp.sum(is_active)
+        fairness_denominator = num_active_bands * sum_of_squares + 1e-9
+        # Use jnp.divide for safe division
+        fairness_index = jnp.divide(sum_of_throughputs**2, fairness_denominator)
+
+        sinr_violations = jnp.sum(jnp.where(is_active, sinr_db < self.min_sinr, 0.0))
+        latency_violations = jnp.sum(state.user_latency > self.max_latency)
+
+        return {
+            "total_throughput": total_throughput,
+            "fairness_index": fairness_index,
+            "sinr_violations": sinr_violations,
+            "latency_violations": latency_violations
+        }
 
     def _step_dynamics(self, state: SpectrumState, action: jnp.ndarray) -> SpectrumState:
         key, subkey = jax.random.split(state.key)
-        new_channel = state.channel_gains * self.fading_coherence + jax.random.normal(subkey, state.channel_gains.shape)
-        new_alloc = action
+        new_channel = state.channel_gains * self.fading_coherence + \
+                      (1 - self.fading_coherence) * jax.random.normal(subkey, state.channel_gains.shape)
         new_tx_power = self.power_levels[action]
-        new_qos = state.qos_metrics.at[:, 0].add(1.0)
-        total_power = jnp.sum(new_tx_power)
-        throughput_bonus = total_power / (self.num_bs * self.num_bands * self.max_power)
-        new_throughput = state.qos_metrics[:, 1] + throughput_bonus
-        new_qos = new_qos.at[:, 1].set(new_throughput)
+        new_latency = state.user_latency + 1.0
         return SpectrumState(
             channel_gains=new_channel,
             interference_map=state.interference_map,
-            qos_metrics=new_qos,
-            spectrum_alloc=new_alloc,
+            user_latency=new_latency,
+            spectrum_alloc=action,
             tx_power=new_tx_power,
             time=state.time + 1,
             key=key
         )
 
-    # def step(self, state: SpectrumState, action: chex.Array) -> Tuple[SpectrumState, TimeStep]:
-    #     action = action.reshape(self.num_bs, self.num_bands)
-    #     action_mask = self._mask_unsafe_actions(state)
-    #     safety = action_mask[jnp.arange(self.num_bs)[:, None], jnp.arange(self.num_bands)[None, :], action]
-    #     safe_action = jnp.where(safety, action, 0)
-    #     previous_tx_power = state.tx_power
-    #     new_state = self._step_dynamics(state, safe_action)
-    #     reward = self._calculate_reward(new_state, safe_action, previous_tx_power) - self._adaptive_penalty(new_state)
-    #     terminated = bool(jnp.any(new_state.qos_metrics[:, 0] > 2 * self.max_latency))
-    #     truncated = bool(new_state.time >= self.max_steps)
-    #     done_flag = terminated or truncated
-    #     timestep = jax.lax.cond(
-    #         done_flag,
-    #         lambda: jax.lax.cond(
-    #             bool(terminated),
-    #             lambda: termination(reward, new_state),
-    #             lambda: truncation(reward, new_state),
-    #         ),
-    #         lambda: transition(reward, new_state),
-    #     )
-    #     return new_state, timestep
     def step(self, state: SpectrumState, action: chex.Array) -> Tuple[SpectrumState, TimeStep]:
         action = action.reshape(self.num_bs, self.num_bands)
         action_mask = self._mask_unsafe_actions(state)
-        safety = action_mask[jnp.arange(self.num_bs)[:, None], jnp.arange(self.num_bands)[None, :], action]
-        safe_action = jnp.where(safety, action, 0)
+        safe_action = jnp.where(action_mask, action, 0)
         previous_tx_power = state.tx_power
         new_state = self._step_dynamics(state, safe_action)
-        reward = self._calculate_reward(new_state, safe_action, previous_tx_power) - self._adaptive_penalty(new_state)
-        
-        # Replace bool() with plain JAX arrays
-        terminated = jnp.any(new_state.qos_metrics[:, 0] > 2 * self.max_latency)
+        reward = self._calculate_reward(new_state, previous_tx_power)
+        terminated = jnp.any(new_state.user_latency > 2 * self.max_latency)
         truncated = new_state.time >= self.max_steps
-        done_flag = jnp.logical_or(terminated, truncated)
-        
-        # Use JAX's conditional logic without bool()
-        timestep = jax.lax.cond(
-            done_flag,
-            lambda: jax.lax.cond(
-                terminated,  # Now using JAX array directly
-                lambda: termination(reward, new_state),
-                lambda: truncation(reward, new_state),
+        return new_state, jax.lax.cond(
+            terminated,
+            lambda s, r: termination(reward=r, observation=s),
+            lambda s, r: jax.lax.cond(
+                truncated,
+                lambda s, r: truncation(reward=r, observation=s),
+                lambda s, r: transition(reward=r, observation=s),
+                s, r
             ),
-            lambda: transition(reward, new_state),
+            new_state, reward
         )
-        return new_state, timestep
 
     def render(self, state: SpectrumState) -> None:
         print(f"Step {int(state.time)}")

@@ -4,6 +4,8 @@ import wandb
 from graphviz import Digraph
 import tempfile
 import os
+import chex
+from typing import Optional
 
 
 def save_model(path, params, st):
@@ -19,14 +21,24 @@ def load_model(path):
   print("Parameters loaded from ", path)
   return params, st
 
+@chex.dataclass
+class SpectrumState:
+    channel_gains: chex.Array
+    interference_map: chex.Array
+    user_latency: chex.Array
+    spectrum_alloc: chex.Array
+    tx_power: chex.Array
+    time: chex.Array
+    key: Optional[chex.PRNGKey] = None
     
-def flatten_state(state):
+def flatten_state(state: SpectrumState) -> jnp.ndarray:
     return jnp.concatenate([
-        state.channel_gains.flatten().astype(jnp.float32),
-        state.interference_map.flatten().astype(jnp.float32),
-        state.qos_metrics.flatten().astype(jnp.float32),
-        state.spectrum_alloc.flatten().astype(jnp.float32),
-        state.tx_power.flatten().astype(jnp.float32)
+        state.channel_gains.flatten(),
+        state.interference_map.flatten(),
+        state.user_latency.flatten(),
+        state.spectrum_alloc.flatten(),
+        state.tx_power.flatten(),
+        jnp.array([state.time]),
     ])
     
     

@@ -1,4 +1,6 @@
 # meta_learnedRL
+
+
 This is a collection of code for a meta learned reinforcement learning project. The project combines reinforcement learning with meta learning to learn how to learn reinforcement learning policies. The code is written in jax and jumanji.
 
 The project is split into four main components:
@@ -10,3 +12,7 @@ The project is split into four main components:
 
 * `mLN/`
 	+ `environment.py`
+
+
+* Installation
+	+ `pip install --upgrade -r requirements.txt`

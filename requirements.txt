@@ -1,9 +1,10 @@
-jax
-chex
-jumanji
+jax[cuda12]
+jaxlib
 dm-haiku
 optax
-RLax
+rlax
+chex
+jumanji
 hydra-core
 wandb
 graphviz

@@ -1,5 +1,5 @@
-num_meta_tasks: 10
-inner_steps: 100
-meta_lr: 0.001
-inner_lr: 0.01
-num_meta_iterations: 100
+meta_lr: 3e-4
+inner_lr: 1e-3
+inner_steps: 5
+num_meta_tasks: 16
+num_meta_iterations: 2000

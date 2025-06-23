@@ -2,5 +2,7 @@ defaults:
   - env: default
   - maml: default
   - recurrent_ml: default
+  - attention_recurrent_ml: default
+
   
 seed: 42
