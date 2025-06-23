@@ -1,5 +1,5 @@
 from mLN.environment import DynamicSpectrumEnv
-from models.recurrent_attention_ml import make_recurrent_networks, train_recurrent_maml_ppo
+from models.recurrent_attention_ml import make_robust_recurrent_networks as make_recurrent_networks, train_recurrent_maml_ppo
 from utils import save_model, flatten_state
 import jax
 import hydra
