@@ -1,0 +1,20 @@
+  learning_rate_actor: 3e-4
+  learning_rate_critic: 3e-4
+  num_epochs: 10              # PPO epochs over the collected rollout
+  num_minibatches: 32         # Minibatches per rollout_length_ppo (e.g., if rollout is 2048, batch_size is 64)
+  rollout_length_ppo: 2048    # Timesteps collected per PPO meta-update / before PPO epochs
+  vf_coef: 0.5
+  ent_coef: 0.01
+  clip_epsilon: 0.2
+  max_grad_norm: 0.5
+  gamma: 0.99
+  lambda_: 0.95
+  use_wandb: True # Or False
+  wandb_project: "ppo-spectrum-access" # Or your existing project
+  wandb_name_ppo: "ppo-baseline-recurrent" # Specific name for this PPO run
+  log_interval_ppo: 10 # Log metrics every PPO update (after all epochs for a rollout)
+  total_timesteps: 1_000_000
+  # Network Hyperparameters for PPO
+  lstm_hidden_dim: 64
+  mlp_hidden_dim: 128
+  critic_hidden_dim: 128
