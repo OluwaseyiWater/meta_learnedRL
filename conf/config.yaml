@@ -3,6 +3,7 @@ defaults:
   - maml: default
   - recurrent_ml: default
   - attention_recurrent_ml: default
+  - ppo: default
 
   
 seed: 42
