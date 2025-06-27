@@ -1,0 +1,25 @@
+  seed: ${seed} # Inherit global seed
+  learning_rate_actor: 3e-4
+  learning_rate_critic: 3e-4
+  num_epochs: 10              
+  num_minibatches: 32         
+  rollout_length_ppo: 2048    
+  vf_coef: 0.5
+  ent_coef: 0.01
+  clip_epsilon: 0.2
+  max_grad_norm: 0.5
+  gamma: 0.99
+  lambda_: 0.95
+  use_wandb: True 
+  wandb_project: "ppo-spectrum-access" 
+  wandb_name_ppo: "ppo-baseline-recurrent" 
+  log_interval_ppo: 10 
+  total_timesteps: 10_000_000
+  lstm_hidden_dim: 64
+  mlp_hidden_dim: 128
+  critic_hidden_dim: 128
+
+# Saving names
+  save_model_name_ppo: "ppo_recurrent_trained_params.pkl"
+  save_history_name_ppo: "ppo_recurrent_training_history.pkl"
+  
