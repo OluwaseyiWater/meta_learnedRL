@@ -14,7 +14,7 @@
   wandb_project: "ppo-spectrum-access" 
   wandb_name_ppo: "ppo-baseline-recurrent" 
   log_interval_ppo: 10 
-  total_timesteps: 1_000_000
+  total_timesteps: 10_000_000
   lstm_hidden_dim: 64
   mlp_hidden_dim: 128
   critic_hidden_dim: 128
