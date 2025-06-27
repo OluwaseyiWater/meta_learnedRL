@@ -7,6 +7,7 @@ import optax
 import tensorflow_probability.substrates.jax as tfp
 from utils import flatten_state 
 import wandb
+from collections import namedtuple
 from utils import SpectrumState
 from mLN.environment import DynamicSpectrumEnv
 
@@ -33,16 +34,6 @@ BANDWIDTH_HZ = 10e6
 NOISE_FIGURE_DB = 7.0
 
 tfd = tfp.distributions
-
-def flatten_state(state: SpectrumState) -> jnp.ndarray:
-    return jnp.concatenate([
-        state.channel_gains.flatten(),
-        state.interference_map.flatten(),
-        state.user_latency.flatten(),
-        state.spectrum_alloc.flatten(),
-        state.tx_power.flatten(),
-        jnp.array([state.time]),
-    ])
 
 def residual_block(x, hidden_dim):
     h = hk.Linear(hidden_dim)(x)
@@ -168,6 +159,10 @@ def compute_gae(traj, gamma=0.99, lambda_=0.95):
     return returns, advantages
 
 def compute_loss(policy_params, value_params, policy_apply, value_apply, traj, config):
+    # If config is a namedtuple, access items with dot notation
+    vf_coef = config.vf_coef if hasattr(config, 'vf_coef') else config["vf_coef"]
+    ent_coef = config.ent_coef if hasattr(config, 'ent_coef') else config["ent_coef"]
+    
     obs = normalize_obs(traj['obs_norm_state'], traj['obs'])
     returns, advantages = compute_gae(traj)
 
@@ -181,7 +176,7 @@ def compute_loss(policy_params, value_params, policy_apply, value_apply, traj, c
     value_pred = value_apply(value_params, obs)
     value_loss = jnp.mean(optax.huber_loss(value_pred, jax.lax.stop_gradient(returns)))
 
-    combined_loss = policy_loss + config["vf_coef"] * value_loss + config["ent_coef"] * entropy_loss
+    combined_loss = policy_loss + vf_coef * value_loss + ent_coef * entropy_loss
 
     loss_info = {
         "combined_loss": combined_loss, "policy_loss": policy_loss,
@@ -190,6 +185,11 @@ def compute_loss(policy_params, value_params, policy_apply, value_apply, traj, c
     return combined_loss, loss_info
 
 def inner_adaptation(params, policy_apply, value_apply, traj, config):
+    # If config is a namedtuple, access items with dot notation
+    inner_policy_lr = config.inner_policy_lr if hasattr(config, 'inner_policy_lr') else config["inner_policy_lr"]
+    inner_value_lr = config.inner_value_lr if hasattr(config, 'inner_value_lr') else config["inner_value_lr"]
+    inner_steps = config.inner_steps if hasattr(config, 'inner_steps') else config["inner_steps"]
+
     def adaptation_step(p, _):
         policy_params, value_params = p
         (loss, loss_info), grads = jax.value_and_grad(compute_loss, argnums=(0,1), has_aux=True)(
@@ -197,12 +197,12 @@ def inner_adaptation(params, policy_apply, value_apply, traj, config):
 
         p_grads, v_grads = grads
 
-        new_policy_params = jax.tree.map(lambda p_i, g: p_i - config["inner_policy_lr"] * g, policy_params, p_grads)
-        new_value_params = jax.tree.map(lambda v_i, g: v_i - config["inner_value_lr"] * g, value_params, v_grads)
+        new_policy_params = jax.tree.map(lambda p_i, g: p_i - inner_policy_lr * g, policy_params, p_grads)
+        new_value_params = jax.tree.map(lambda v_i, g: v_i - inner_value_lr * g, value_params, v_grads)
 
         return (new_policy_params, new_value_params), loss_info
 
-    (adapted_params, loss_infos) = jax.lax.scan(adaptation_step, params, None, length=config["inner_steps"])
+    (adapted_params, loss_infos) = jax.lax.scan(adaptation_step, params, None, length=inner_steps)
     final_loss_info = jax.tree.map(lambda x: x[-1], loss_infos)
     return adapted_params, final_loss_info
 
@@ -215,23 +215,89 @@ def sample_task(env: DynamicSpectrumEnv, key: jax.random.PRNGKey):
         max_interference=env.max_interference * variation,
     )
 
+@partial(jax.jit, static_argnames=("env", "policy_apply", "value_apply", "config"))
+def evaluate_adaptation(
+    params: Tuple[Any, Any],
+    obs_norm_state: ObsNormalizerState,
+    key: jax.random.PRNGKey,
+    env: DynamicSpectrumEnv,
+    policy_apply: Callable,
+    value_apply: Callable,
+    config: Any, # Can now be a namedtuple
+):
+    """Runs evaluation on a batch of tasks to measure pre- and post-adaptation performance."""
+    eval_task_keys = jax.random.split(key, config.num_eval_tasks)
+
+    def run_single_task_eval(task_key):
+        task_env = sample_task(env, task_key)
+        p_policy, p_value = params
+        pre_key, adapt_key, post_key = jax.random.split(task_key, 3)
+
+        # 1. Pre-adaptation evaluation
+        pre_traj = sample_trajectories(task_env, p_policy, p_value, policy_apply, value_apply, pre_key, obs_norm_state, config.rollout_length)
+
+        # 2. Adaptation step (needs its own trajectory)
+        adapt_traj = sample_trajectories(task_env, p_policy, p_value, policy_apply, value_apply, adapt_key, obs_norm_state, config.rollout_length)
+        adapt_traj["obs_norm_state"] = obs_norm_state
+        adapted_params, _ = inner_adaptation(params, policy_apply, value_apply, adapt_traj, config)
+        adapted_p_policy, adapted_p_value = adapted_params
+
+        # 3. Post-adaptation evaluation
+        post_traj = sample_trajectories(task_env, adapted_p_policy, adapted_p_value, policy_apply, value_apply, post_key, obs_norm_state, config.rollout_length)
+
+        # 4. Collect metrics
+        metric_keys = ["rewards", "total_throughput", "fairness_index", "sinr_violations", "latency_violations"]
+        
+        def get_avg_traj_metrics(traj, prefix):
+            return {f"{prefix}_{k}": jnp.mean(traj[k]) for k in metric_keys}
+
+        pre_metrics = get_avg_traj_metrics(pre_traj, "pre")
+        post_metrics = get_avg_traj_metrics(post_traj, "post")
+        return {**pre_metrics, **post_metrics}
+
+    all_tasks_metrics = jax.vmap(run_single_task_eval)(eval_task_keys)
+    avg_metrics = jax.tree.map(lambda x: jnp.mean(x, axis=0), all_tasks_metrics)
+
+    final_eval_metrics = {}
+    metric_keys_gain = ["rewards", "total_throughput", "fairness_index"]
+    metric_keys_reduce = ["sinr_violations", "latency_violations"]
+
+    for k in metric_keys_gain:
+        pre_k, post_k = f"pre_{k}", f"post_{k}"
+        final_eval_metrics[f"eval_{pre_k}"] = avg_metrics[pre_k]
+        final_eval_metrics[f"eval_{post_k}"] = avg_metrics[post_k]
+        final_eval_metrics[f"eval_{k}_improvement"] = avg_metrics[post_k] - avg_metrics[pre_k]
+    
+    for k in metric_keys_reduce:
+        pre_k, post_k = f"pre_{k}", f"post_{k}"
+        final_eval_metrics[f"eval_{pre_k}"] = avg_metrics[pre_k]
+        final_eval_metrics[f"eval_{post_k}"] = avg_metrics[post_k]
+        final_eval_metrics[f"eval_{k}_improvement"] = avg_metrics[pre_k] - avg_metrics[post_k]
+
+    return final_eval_metrics
+
 def train_maml(config: Dict):
+    ### FIX 2: Convert dict to a hashable namedtuple for JIT ###
+    Config = namedtuple("Config", config.keys())
+    h_config = Config(**config)
+
     env = DynamicSpectrumEnv()
     policy, value = make_networks(env.num_bs, env.num_bands, env.num_power_levels)
-    key = jax.random.PRNGKey(config["seed"])
-    key, p_key, v_key, t_key = jax.random.split(key, 4)
+    key = jax.random.PRNGKey(h_config.seed)
+    key, p_key, v_key = jax.random.split(key, 3)
     dummy_obs = flatten_state(env.observation_spec().generate_value())
     policy_params = policy.init(p_key, dummy_obs)
     value_params = value.init(v_key, dummy_obs)
     params = (policy_params, value_params)
 
-    optimizer = optax.chain(optax.clip_by_global_norm(config["max_grad_norm"]), optax.adam(config["meta_lr"]))
+    optimizer = optax.chain(optax.clip_by_global_norm(h_config.max_grad_norm), optax.adam(h_config.meta_lr))
     opt_state = optimizer.init(params)
 
     obs_norm_state = init_obs_normalizer(dummy_obs.shape[0])
 
-    if config["use_wandb"]:
-        wandb.init(project=config["wandb_project"], name=config["wandb_name"], config=config)
+    if h_config.use_wandb:
+        # Log the original dictionary for better readability in wandb UI
+        wandb.init(project=h_config.wandb_project, name=h_config.wandb_name, config=config)
 
     @jax.jit
     def meta_update_step(params, opt_state, obs_norm_state, meta_batch_keys):
@@ -240,19 +306,18 @@ def train_maml(config: Dict):
             train_key, test_key = jax.random.split(task_key)
             task_env = sample_task(env, task_key)
 
-            train_traj = sample_trajectories(task_env, p[0], p[1], policy.apply, value.apply, train_key, obs_norm_state, config["rollout_length"])
-
+            train_traj = sample_trajectories(task_env, p[0], p[1], policy.apply, value.apply, train_key, obs_norm_state, h_config.rollout_length)
             current_obs_norm_state = update_obs_normalizer(obs_norm_state, train_traj["obs"])
             train_traj["obs_norm_state"] = current_obs_norm_state
 
-            adapted_params, _ = inner_adaptation(p, policy.apply, value.apply, train_traj, config)
+            adapted_params, _ = inner_adaptation(p, policy.apply, value.apply, train_traj, h_config)
 
-            test_traj = sample_trajectories(task_env, adapted_params[0], adapted_params[1], policy.apply, value.apply, test_key, current_obs_norm_state, config["rollout_length"])
+            test_traj = sample_trajectories(task_env, adapted_params[0], adapted_params[1], policy.apply, value.apply, test_key, current_obs_norm_state, h_config.rollout_length)
             test_traj["obs_norm_state"] = current_obs_norm_state
-
-            meta_loss, loss_info = compute_loss(adapted_params[0], adapted_params[1], policy.apply, value.apply, test_traj, config)
-
-            # --- DETAILED METRIC COMPUTATION ---
+            
+            # Pass the hashable config here
+            meta_loss, loss_info = compute_loss(adapted_params[0], adapted_params[1], policy.apply, value.apply, test_traj, h_config)
+            
             metric_keys = ["rewards", "total_throughput", "fairness_index", "sinr_violations", "latency_violations"]
 
             def get_avg_traj_metrics(traj):
@@ -263,11 +328,11 @@ def train_maml(config: Dict):
 
             all_metrics = {**loss_info}
             for k in metric_keys:
-                pre_val = pre_adapt_metrics[k]
-                post_val = post_adapt_metrics[k]
-                all_metrics[f"pre_adapt_{k}"] = pre_val
-                all_metrics[f"post_adapt_{k}"] = post_val
-                all_metrics[f"{k}_improvement"] = post_val - pre_val
+                pre_val, post_val = pre_adapt_metrics[k], post_adapt_metrics[k]
+                all_metrics[f"train_pre_adapt_{k}"] = pre_val
+                all_metrics[f"train_post_adapt_{k}"] = post_val
+                improvement = post_val - pre_val if k not in ["sinr_violations", "latency_violations"] else pre_val - post_val
+                all_metrics[f"train_{k}_improvement"] = improvement
 
             return meta_loss, (all_metrics, current_obs_norm_state)
 
@@ -275,44 +340,56 @@ def train_maml(config: Dict):
         (losses_and_aux, task_grads) = jax.vmap(value_and_grad_fn, in_axes=(None, 0))(params, meta_batch_keys)
 
         (_, (all_task_metrics, new_obs_norm_states)) = losses_and_aux
-
         avg_grads = jax.tree.map(lambda x: jnp.mean(x, axis=0), task_grads)
-        # Average all collected metrics across the meta-batch
         avg_metrics = jax.tree.map(lambda x: jnp.mean(x), all_task_metrics)
-
         updates, new_opt_state = optimizer.update(avg_grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
-
         final_obs_norm_state = jax.tree.map(lambda x: x[0], new_obs_norm_states)
 
         return new_params, new_opt_state, final_obs_norm_state, avg_metrics
 
-    task_keys = jax.random.split(t_key, config["num_meta_iters"])
-    for i in range(config["num_meta_iters"]):
-        batch_keys = jax.random.split(task_keys[i], config["meta_batch_size"])
-        params, opt_state, obs_norm_state, metrics = meta_update_step(
+    for i in range(h_config.num_meta_iters):
+        key, train_key, eval_key = jax.random.split(key, 3)
+        
+        batch_keys = jax.random.split(train_key, h_config.meta_batch_size)
+        params, opt_state, obs_norm_state, train_metrics = meta_update_step(
             params, opt_state, obs_norm_state, batch_keys
         )
-        if i % config["log_interval"] == 0:
-            # Enhanced print statement
-            print(
-                f"[Iter {i}] Loss: {metrics['combined_loss']:.3f}, "
-                f"Pre-Reward: {metrics['pre_adapt_rewards']:.2f}, "
-                f"Post-Reward: {metrics['post_adapt_rewards']:.2f}, "
-                f"Improvement: {metrics['rewards_improvement']:.2f}, "
-                f"Post-Throughput: {metrics['post_adapt_total_throughput']:.2f}, "
-                f"Post-SINR-Violations: {metrics['post_adapt_sinr_violations']:.2f}"
-            )
-            # Log all metrics to wandb
-            if config["use_wandb"]:
-                wandb.log({"iteration": i, **metrics})
 
-    if config["use_wandb"]:
+        if i % h_config.log_interval == 0:
+            print(
+                f"[Iter {i:04d}] Loss: {train_metrics['combined_loss']:.3f}, P-Loss: {train_metrics['policy_loss']:.3f}, "
+                f"V-Loss: {train_metrics['value_loss']:.3f}, Entropy: {train_metrics['entropy']:.3f}, "
+                f"Train Reward (Post-Adapt): {train_metrics['train_post_adapt_rewards']:.3f}"
+            )
+            if h_config.use_wandb:
+                wandb.log({"iteration": i, **train_metrics})
+        
+        if i % h_config.eval_interval == 0 and i > 0:
+            ### FIX 3: Pass the hashable h_config to the jitted function ###
+            eval_metrics = evaluate_adaptation(
+                params, obs_norm_state, eval_key, env,
+                policy.apply, value.apply, h_config
+            )
+            print(
+                f"[Iter {i:04d} EVAL] Pre-Reward: {eval_metrics['eval_pre_rewards']:.3f}, "
+                f"Post-Reward: {eval_metrics['eval_post_rewards']:.3f} "
+                f"(Impr: {eval_metrics['eval_rewards_improvement']:.3f})"
+            )
+            print(
+                f"               Pre-SINR Viol.: {eval_metrics['eval_pre_sinr_violations']:.3f}, "
+                f"Post-SINR Viol.: {eval_metrics['eval_post_sinr_violations']:.3f} "
+                f"(Impr: {eval_metrics['eval_sinr_violations_improvement']:.3f})"
+            )
+            
+            if h_config.use_wandb:
+                wandb.log({"iteration": i, **eval_metrics})
+
+    if h_config.use_wandb:
         wandb.finish()
 
     return params
-   
-   
+
 if __name__ == '__main__':
     config = {
         "seed": 42,
@@ -327,9 +404,11 @@ if __name__ == '__main__':
         "ent_coef": 0.01,
         "max_grad_norm": 0.5,
         "log_interval": 10,
+        "eval_interval": 50,
+        "num_eval_tasks": 10,
         "use_wandb": False,
         "wandb_project": "maml-spectrum-access",
-        "wandb_name": "maml-v12-stable"
+        "wandb_name": "maml-v13-comparable-logging"
     }
     print("Starting MAML training...")
     trained_params = train_maml(config)

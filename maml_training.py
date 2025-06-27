@@ -25,6 +25,8 @@ def main(cfg: DictConfig) -> None:
         "rollout_length": cfg.maml.rollout_length,
         "vf_coef": cfg.maml.vf_coef,
         "ent_coef": cfg.maml.ent_coef,
+        "eval_interval": cfg.maml.eval_interval,
+        "num_eval_tasks": cfg.maml.num_eval_tasks,
         "max_grad_norm": cfg.maml.max_grad_norm,
         "log_interval": cfg.maml.log_interval,
         "use_wandb": cfg.maml.use_wandb,

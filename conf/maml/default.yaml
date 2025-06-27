@@ -8,6 +8,8 @@ rollout_length: 128
 vf_coef: 0.5
 ent_coef: 0.01
 max_grad_norm: 0.5
+eval_interval: 50
+num_eval_tasks: 10
 log_interval: 10
 wandb_project: "maml-rl"
 wandb_name: "maml-rl-run"
